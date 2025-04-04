@@ -4,9 +4,48 @@
 
 #include <Arduino.h>
 
+// Configuration for DMA-based readings
+#define USE_DMA_FOR_PRESSURE_SENSOR 0  // DMA disabled due to compile errors - needs HAL driver access
+
+// DMA buffer size - number of samples to collect
+#define PRESSURE_DMA_BUFFER_SIZE 8
+
+// Structure to hold pressure sensor DMA state
+typedef struct {
+  bool dmaActive;                             // Indicates if DMA transfer is active
+  uint16_t rawReadings[PRESSURE_DMA_BUFFER_SIZE]; // Raw ADC values from DMA
+  uint8_t readIndex;                          // Current read index in the buffer
+  uint8_t writeIndex;                         // Current write index in the buffer
+  float filteredPressure;                     // Latest filtered pressure value
+} PressureDmaState_t;
+
+// Initialize I2C and ADS1X15 pressure sensor
 void adsInit(void);
+
+// Reset I2C bus if stuck
 void i2cResetState(void);
+
+// Get the latest pressure reading
 float getPressure(void);
-void getAdsError(void);
+
+// Check for ADS errors and recover
+bool getAdsError(void);
+
+// Apply moving average filter to pressure readings
+float movingAveragePressure(float newReading);
+
+#if USE_DMA_FOR_PRESSURE_SENSOR
+// Initialize DMA for pressure sensor
+void initDmaPressureReading(void);
+
+// Start a DMA transfer for pressure readings
+void startPressureDmaTransfer(void);
+
+// DMA completion callback
+void pressureDmaCallback(void);
+
+// Process completed DMA readings
+float processDmaPressureReadings(void);
+#endif
 
 #endif
