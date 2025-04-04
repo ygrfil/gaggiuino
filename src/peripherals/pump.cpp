@@ -34,23 +34,29 @@ void pumpInit(const int powerLineFrequency, const float pumpFlowAtZero) {
 // Function that returns the percentage of clicks the pump makes in it's current phase
 inline float getPumpPct(const float targetPressure, const float flowRestriction, const SensorState &currentState) {
   if (targetPressure == 0.f) {
-      return 0.f;
+    return 0.f;
   }
 
   float diff = targetPressure - currentState.smoothedPressure;
   float maxPumpPct = flowRestriction <= 0.f ? 1.f : getClicksPerSecondForFlow(flowRestriction, currentState.smoothedPressure) / (float) maxPumpClicksPerSecond;
   float pumpPctToMaintainFlow = getClicksPerSecondForFlow(currentState.smoothedPumpFlow, currentState.smoothedPressure) / (float) maxPumpClicksPerSecond;
 
+  // Enhanced pressure control with better predictive response
   if (diff > 2.f) {
-    return fminf(maxPumpPct, 0.25f + 0.2f * diff);
+    // More aggressive ramp for large pressure differences
+    return fminf(maxPumpPct, 0.3f + 0.25f * diff);
   }
 
   if (diff > 0.f) {
-    return fminf(maxPumpPct, pumpPctToMaintainFlow * 0.95f + 0.1f + 0.2f * diff);
+    // More responsive adjustment for fine pressure control
+    return fminf(maxPumpPct, pumpPctToMaintainFlow * 0.98f + 0.12f + 0.22f * diff);
   }
 
+  // Better pressure stability with adaptive deceleration
   if (currentState.pressureChangeSpeed < 0) {
-    return fminf(maxPumpPct, pumpPctToMaintainFlow * 0.2f);
+    // Smoother transition when pressure is falling
+    float decelerationFactor = fminf(0.3f, fabsf(currentState.pressureChangeSpeed) * 0.15f);
+    return fminf(maxPumpPct, pumpPctToMaintainFlow * (0.2f + decelerationFactor));
   }
 
   return 0;
