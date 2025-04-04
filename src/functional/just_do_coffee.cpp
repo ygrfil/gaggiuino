@@ -3,56 +3,101 @@
 #include "../lcd/lcd.h"
 
 extern unsigned long steamTime;
-// inline static float TEMP_DELTA(float d) { return (d*DELTA_RANGE); }
-inline static float TEMP_DELTA(float d, const SensorState &currentState) {
-  return (
-    d * (currentState.pumpFlow < 1.f
-      ? currentState.pumpFlow / 7.f
-      : currentState.pumpFlow / 5.f
-    )
-  );
+
+// Optimized TEMP_DELTA calculation using integer math when possible
+inline static int16_t TEMP_DELTA_OPTIMIZED(int16_t tempSetpoint, const SensorState &currentState) {
+  // Use integer scaling factor (100x) to avoid floating point
+  int16_t pumpFlowScaled = currentState.pumpFlow * 100;
+  int16_t divisor = (pumpFlowScaled < 100) ? 700 : 500; // <1.0 ? 7.0 : 5.0
+  return (tempSetpoint * pumpFlowScaled) / divisor;
 }
 
 void justDoCoffee(const eepromValues_t &runningCfg, const SensorState &currentState, const bool brewActive) {
-  lcdTargetState((int)HEATING::MODE_brew); // setting the target mode to "brew temp"
-  float brewTempSetPoint = ACTIVE_PROFILE(runningCfg).setpoint + runningCfg.offsetTemp;
-  float sensorTemperature = currentState.temperature + runningCfg.offsetTemp;
-
-  if (brewActive) { //if brewState == true
-    if(sensorTemperature <= brewTempSetPoint - 5.f) {
+  // Set target mode to brew temp
+  lcdTargetState((int)HEATING::MODE_brew);
+  
+  // Scale temperatures by 10 to use integer math (higher precision)
+  const int16_t TEMP_SCALE = 10;
+  int16_t brewTempSetPoint = (ACTIVE_PROFILE(runningCfg).setpoint + runningCfg.offsetTemp) * TEMP_SCALE;
+  int16_t sensorTemperature = (currentState.temperature + runningCfg.offsetTemp) * TEMP_SCALE;
+  
+  // Threshold temperatures (scaled by 10)
+  const int16_t BREW_TEMP_SAFETY_MARGIN = 50; // 5.0 degrees
+  const int16_t IDLE_TEMP_LOWER_THRESHOLD = 100; // 10.0 degrees
+  
+  // Control logic for brewing mode
+  if (brewActive) {
+    // Brewing mode
+    if(sensorTemperature <= brewTempSetPoint - BREW_TEMP_SAFETY_MARGIN) {
+      // Temperature too low - turn on boiler at full power
       setBoilerOn();
     } else {
-      float deltaOffset = 0.f;
+      // Near target temperature - use PWM control
+      int16_t deltaOffset = 0;
+      
+      // Apply delta temperature compensation if enabled
       if (runningCfg.brewDeltaState) {
-        float tempDelta = TEMP_DELTA(brewTempSetPoint, currentState);
-        float BREW_TEMP_DELTA = mapRange(sensorTemperature, brewTempSetPoint, brewTempSetPoint + tempDelta, tempDelta, 0, 0);
-        deltaOffset = constrain(BREW_TEMP_DELTA, 0, tempDelta);
+        int16_t tempDelta = TEMP_DELTA_OPTIMIZED(brewTempSetPoint / TEMP_SCALE, currentState);
+        // Simplified delta calculation
+        if (sensorTemperature > brewTempSetPoint) {
+          // At or above target - no compensation needed
+          deltaOffset = 0;
+        } else if (sensorTemperature <= brewTempSetPoint) {
+          // Scale compensation based on temperature difference
+          const int16_t tempRange = tempDelta * TEMP_SCALE;
+          deltaOffset = ((brewTempSetPoint - sensorTemperature) * tempDelta) / tempRange;
+          // Constrain delta offset
+          if (deltaOffset > tempDelta) deltaOffset = tempDelta;
+          if (deltaOffset < 0) deltaOffset = 0;
+        }
       }
+      
+      // Apply heat if needed
       if (sensorTemperature <= brewTempSetPoint + deltaOffset) {
         pulseHeaters(runningCfg.hpwr, runningCfg.mainDivider, runningCfg.brewDivider, brewActive);
       } else {
         setBoilerOff();
       }
     }
-  } else { //if brewState == false
-    if (sensorTemperature <= ((float)brewTempSetPoint - 10.f)) {
+  } else {
+    // Idle mode - simpler logic
+    if (sensorTemperature <= brewTempSetPoint - IDLE_TEMP_LOWER_THRESHOLD) {
+      // Cold - full power
       setBoilerOn();
     } else {
+      // Calculate appropriate power level
       int HPWR_LOW = runningCfg.hpwr / runningCfg.mainDivider;
-      // Calculating the boiler heating power range based on the below input values
-      int HPWR_OUT = mapRange(sensorTemperature, brewTempSetPoint - 10, brewTempSetPoint, runningCfg.hpwr, HPWR_LOW, 0);
-      HPWR_OUT = constrain(HPWR_OUT, HPWR_LOW, runningCfg.hpwr);  // limits range of sensor values to HPWR_LOW and HPWR
-
-      if (sensorTemperature <= ((float)brewTempSetPoint - 5.f)) {
-        pulseHeaters(HPWR_OUT, 1, runningCfg.mainDivider, brewActive);
-      } else if (sensorTemperature < ((float)brewTempSetPoint)) {
-        pulseHeaters(HPWR_OUT,  runningCfg.brewDivider, runningCfg.brewDivider, brewActive);
+      int heatPower;
+      
+      // Simplified power calculation based on temperature range
+      if (sensorTemperature <= brewTempSetPoint - BREW_TEMP_SAFETY_MARGIN) {
+        // Between 5-10 degrees below target - medium power
+        heatPower = runningCfg.hpwr / 2 + HPWR_LOW / 2; // Average of max and min
+      } else if (sensorTemperature < brewTempSetPoint) {
+        // Less than 5 degrees below target - low power
+        heatPower = HPWR_LOW;
+      } else {
+        // At or above target - no heat
+        setBoilerOff();
+        heatPower = 0; // Not actually used but set for clarity
+      }
+      
+      // Apply heat if needed
+      if (sensorTemperature < brewTempSetPoint) {
+        // Use appropriate pulse pattern based on temperature
+        if (sensorTemperature <= brewTempSetPoint - BREW_TEMP_SAFETY_MARGIN) {
+          pulseHeaters(heatPower, 1, runningCfg.mainDivider, brewActive);
+        } else {
+          pulseHeaters(heatPower, runningCfg.brewDivider, runningCfg.brewDivider, brewActive);
+        }
       } else {
         setBoilerOff();
       }
     }
   }
-  if (brewActive || !currentState.brewSwitchState) { // keep steam boiler supply valve open while steaming/descale only
+  
+  // Valve control logic remains unchanged
+  if (brewActive || !currentState.brewSwitchState) {
     setSteamValveRelayOff();
   }
   setSteamBoilerRelayOff();
