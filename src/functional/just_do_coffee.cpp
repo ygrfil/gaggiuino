@@ -47,32 +47,46 @@ void justDoCoffee(const eepromValues_t &runningCfg, const SensorState &currentSt
   // Original temperature control implementation
   // Control logic for brewing mode
   if (brewActive) {
-    // Brewing mode
+    // Brewing mode with optimized PID-like control
     if(sensorTemperature <= brewTempSetPoint - BREW_TEMP_SAFETY_MARGIN) {
-      // Temperature too low - turn on boiler at full power
-      setBoilerOn();
+      setBoilerOn(); // Full power when far from target
     } else {
-      // Near target temperature - use PWM control
       int16_t deltaOffset = 0;
       
-      // Apply delta temperature compensation if enabled
       if (runningCfg.brewDeltaState) {
         int16_t tempDelta = TEMP_DELTA_OPTIMIZED(brewTempSetPoint / TEMP_SCALE, currentState);
-        // Simplified delta calculation
+        
+        // Enhanced proportional control based on temperature difference
         if (sensorTemperature > brewTempSetPoint) {
-          // At or above target - no compensation needed
           deltaOffset = 0;
-        } else if (sensorTemperature <= brewTempSetPoint) {
-          // Scale compensation based on temperature difference
+        } else {
+          // More responsive temperature adjustment curve
           const int16_t tempRange = tempDelta * TEMP_SCALE;
-          deltaOffset = ((brewTempSetPoint - sensorTemperature) * tempDelta) / tempRange;
-          // Constrain delta offset
+          // Faster response when further from target
+          deltaOffset = ((brewTempSetPoint - sensorTemperature) * tempDelta * 1.2f) / tempRange;
+          // Limit maximum adjustment
           if (deltaOffset > tempDelta) deltaOffset = tempDelta;
           if (deltaOffset < 0) deltaOffset = 0;
         }
       }
       
-      // Apply heat if needed
+      // Add predictive component based on temperature trend
+      static int16_t lastTemperature = 0;
+      static uint32_t lastTempTime = 0;
+      uint32_t currentTime = millis();
+      
+      if (currentTime - lastTempTime > 250) { // 4Hz temperature trend sampling
+        // Add predictive component if temperature is falling
+        if (lastTemperature > sensorTemperature && lastTemperature != 0) {
+          // Increase heating proportionally to temperature drop rate
+          int16_t tempDrop = lastTemperature - sensorTemperature;
+          deltaOffset += (tempDrop * 2); // Amplify response to falling temperature
+        }
+        lastTemperature = sensorTemperature;
+        lastTempTime = currentTime;
+      }
+      
+      // Apply heat based on enhanced control algorithm
       if (sensorTemperature <= brewTempSetPoint + deltaOffset) {
         pulseHeaters(runningCfg.hpwr, runningCfg.mainDivider, runningCfg.brewDivider, brewActive);
       } else {
