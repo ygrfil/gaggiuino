@@ -24,7 +24,26 @@ void justDoCoffee(const eepromValues_t &runningCfg, const SensorState &currentSt
   // Threshold temperatures (scaled by 10)
   const int16_t BREW_TEMP_SAFETY_MARGIN = 50; // 5.0 degrees
   const int16_t IDLE_TEMP_LOWER_THRESHOLD = 100; // 10.0 degrees
-  
+
+#if defined(USE_HARDWARE_TIMER_PWM)
+  // Use hardware timer based PWM for more precise temperature control
+  if (brewActive) {
+    // Brewing mode - use proportional control with hardware PWM
+    int16_t tempDelta = 0;
+    
+    // Apply delta temperature compensation if enabled
+    if (runningCfg.brewDeltaState) {
+      tempDelta = TEMP_DELTA_OPTIMIZED(brewTempSetPoint / TEMP_SCALE, currentState);
+    }
+    
+    // Apply hardware PWM control with appropriate temperature target
+    applyHeaterControl(sensorTemperature, brewTempSetPoint + tempDelta, BREW_TEMP_SAFETY_MARGIN, brewActive);
+  } else {
+    // Idle mode - simpler proportional control
+    applyHeaterControl(sensorTemperature, brewTempSetPoint, IDLE_TEMP_LOWER_THRESHOLD, brewActive);
+  }
+#else
+  // Original temperature control implementation
   // Control logic for brewing mode
   if (brewActive) {
     // Brewing mode
@@ -95,6 +114,7 @@ void justDoCoffee(const eepromValues_t &runningCfg, const SensorState &currentSt
       }
     }
   }
+#endif
   
   // Valve control logic remains unchanged
   if (brewActive || !currentState.brewSwitchState) {
@@ -104,6 +124,11 @@ void justDoCoffee(const eepromValues_t &runningCfg, const SensorState &currentSt
 }
 
 void pulseHeaters(const uint32_t pulseLength, const int factor_1, const int factor_2, const bool brewActive) {
+#if defined(USE_HARDWARE_TIMER_PWM)
+  // Use hardware timer based PWM for precise heater control
+  configurePWMHeaterControl(pulseLength, factor_1, factor_2, brewActive);
+#else
+  // Original software timer based implementation
   static uint32_t heaterWave;
   static bool heaterState;
   if (!heaterState && ((millis() - heaterWave) > (pulseLength * factor_1))) {
@@ -115,6 +140,7 @@ void pulseHeaters(const uint32_t pulseLength, const int factor_1, const int fact
     heaterState=!heaterState;
     heaterWave=millis();
   }
+#endif
 }
 
 //#############################################################################################
@@ -126,6 +152,53 @@ void steamCtrl(const eepromValues_t &runningCfg, SensorState &currentState) {
   float steamTempSetPoint = runningCfg.steamSetPoint + runningCfg.offsetTemp;
   float sensorTemperature = currentState.temperature + runningCfg.offsetTemp;
 
+#if defined(USE_HARDWARE_TIMER_PWM)
+  // Use hardware timer for precise steam temperature control
+  const int16_t TEMP_SCALE = 10;
+  int16_t scaledSteamTempSetPoint = steamTempSetPoint * TEMP_SCALE;
+  int16_t scaledSensorTemperature = sensorTemperature * TEMP_SCALE;
+  
+  if (currentState.smoothedPressure > steamThreshold_ || scaledSensorTemperature > scaledSteamTempSetPoint) {
+    // Pressure or temperature too high - turn everything off
+    heaterHardwareOff();
+    setSteamBoilerRelayOff();
+    setSteamValveRelayOff();
+    setPumpOff();
+  } else {
+    // Apply proportional control for steam temperature
+    const int16_t STEAM_TEMP_HYSTERESIS = 50; // 5.0 degrees
+    
+    // Calculate duty cycle based on temperature difference
+    int16_t tempDiff = scaledSteamTempSetPoint - scaledSensorTemperature;
+    uint8_t dutyCycle = 0;
+    
+    if (tempDiff <= 0) {
+      // At or above target temperature
+      dutyCycle = 0;
+    } else if (tempDiff >= STEAM_TEMP_HYSTERESIS) {
+      // Far below target temperature
+      dutyCycle = 100;
+    } else {
+      // Proportional control when within hysteresis range
+      dutyCycle = (tempDiff * 100) / STEAM_TEMP_HYSTERESIS;
+    }
+    
+    // Apply PWM duty cycle
+    setHeaterDutyCycle(dutyCycle);
+    
+    // Rest of steam control logic
+    setSteamValveRelayOn();
+    setSteamBoilerRelayOn();
+    #ifndef DREAM_STEAM_DISABLED // disabled for bigger boilers which have no need of adding water during steaming
+      if (currentState.smoothedPressure < activeSteamPressure_) {
+        setPumpToRawValue(3);
+      } else {
+        setPumpOff();
+      }
+    #endif
+  }
+#else
+  // Original steam control implementation
   if (currentState.smoothedPressure > steamThreshold_ || sensorTemperature > steamTempSetPoint) {
     setBoilerOff();
     setSteamBoilerRelayOff();
@@ -147,6 +220,7 @@ void steamCtrl(const eepromValues_t &runningCfg, SensorState &currentState) {
       }
     #endif
   }
+#endif
 
   /*In case steam is forgotten ON for more than 15 min*/
   if (currentState.smoothedPressure > passiveSteamPressure_) {

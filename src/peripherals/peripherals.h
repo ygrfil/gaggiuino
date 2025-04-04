@@ -3,8 +3,11 @@
 #define PERIPHERALS_H
 
 #include "pindef.h"
-#include "peripherals.h"
+#include "hw_timer.h"
 #include <Arduino.h>
+
+// Flag to enable hardware timer-based PWM
+#define USE_HARDWARE_TIMER_PWM
 
 static inline void pinInit(void) {
   #if defined(LEGO_VALVE_RELAY)
@@ -12,7 +15,18 @@ static inline void pinInit(void) {
   #else
     pinMode(valvePin, OUTPUT);
   #endif
-  pinMode(relayPin, OUTPUT);
+
+  #if defined(USE_HARDWARE_TIMER_PWM)
+    // For hardware PWM, the pin will be configured by the timer
+    // Just initialize it as output for safety
+    pinMode(relayPin, OUTPUT);
+    digitalWrite(relayPin, LOW);
+    // Initialize hardware timer for heater control
+    heaterTimerInit();
+  #else
+    pinMode(relayPin, OUTPUT);
+  #endif
+
   #ifdef steamValveRelayPin
   pinMode(steamValveRelayPin, OUTPUT);
   #endif
@@ -28,11 +42,33 @@ static inline void pinInit(void) {
 
 // Actuating the heater element
 static inline void setBoilerOn(void) {
-  digitalWrite(relayPin, HIGH);  // boilerPin -> HIGH
+  #if defined(USE_HARDWARE_TIMER_PWM)
+    heaterHardwareOn();
+  #else
+    digitalWrite(relayPin, HIGH);  // boilerPin -> HIGH
+  #endif
 }
 
 static inline void setBoilerOff(void) {
-  digitalWrite(relayPin, LOW);  // boilerPin -> LOW
+  #if defined(USE_HARDWARE_TIMER_PWM)
+    heaterHardwareOff();
+  #else
+    digitalWrite(relayPin, LOW);  // boilerPin -> LOW
+  #endif
+}
+
+// Set heater PWM duty cycle (0-100%)
+static inline void setBoilerPWM(uint8_t dutyCycle) {
+  #if defined(USE_HARDWARE_TIMER_PWM)
+    setHeaterDutyCycle(dutyCycle);
+  #else
+    // No software PWM implementation - just on/off
+    if (dutyCycle > 50) {
+      setBoilerOn();
+    } else {
+      setBoilerOff();
+    }
+  #endif
 }
 
 static inline void setSteamValveRelayOn(void) {
