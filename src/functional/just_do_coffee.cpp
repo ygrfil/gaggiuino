@@ -4,8 +4,9 @@
 
 extern unsigned long steamTime;
 
-// Optimized TEMP_DELTA calculation using integer math when possible
-inline static int16_t TEMP_DELTA_OPTIMIZED(int16_t tempSetpoint, const SensorState &currentState) {
+// Optimized TEMP_DELTA calculation using integer math
+// Implementation of the function declared in the header
+int16_t TEMP_DELTA_OPTIMIZED(int16_t tempSetpoint, const SensorState &currentState) {
   // Use integer scaling factor (100x) to avoid floating point
   int16_t pumpFlowScaled = currentState.pumpFlow * 100;
   int16_t divisor = (pumpFlowScaled < 100) ? 700 : 500; // <1.0 ? 7.0 : 5.0

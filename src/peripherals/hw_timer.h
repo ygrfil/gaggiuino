@@ -7,10 +7,10 @@
 #include "../pindef.h"
 
 // Timer instance for heater control PWM
-HardwareTimer *heaterTimer = nullptr;
+extern HardwareTimer *heaterTimer;
 
 // Timer channel for the heater pin
-uint32_t heaterTimerChannel;
+extern uint32_t heaterTimerChannel;
 
 // Default values used for timer configuration
 const uint32_t TIMER_PRESCALER = 1; // No prescaling
@@ -18,13 +18,13 @@ const uint32_t TIMER_PERIOD = 1000; // 1000 clock ticks = 1ms @1000Hz
 const uint32_t TIMER_FREQUENCY = 1000; // 1kHz PWM frequency
 
 // Current PWM duty cycle (0-100%)
-volatile uint8_t currentDutyCycle = 0;
+extern volatile uint8_t currentDutyCycle;
 
 // Timer setup complete flag
-bool timerSetupComplete = false;
+extern bool timerSetupComplete;
 
 // Timer interrupts are enabled
-bool timerInterruptsEnabled = false;
+extern bool timerInterruptsEnabled;
 
 /**
  * Initialize the hardware timer for heater control

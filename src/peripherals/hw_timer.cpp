@@ -1,5 +1,13 @@
 /* Hardware Timer Implementation for Heater Control */
 #include "hw_timer.h"
+#include "heater_control.h"  // Include the forward declarations for heater control functions
+
+// Define global variables that were declared with extern in header
+HardwareTimer *heaterTimer = nullptr;
+uint32_t heaterTimerChannel;
+volatile uint8_t currentDutyCycle = 0;
+bool timerSetupComplete = false;
+bool timerInterruptsEnabled = false;
 
 /**
  * Initialize the hardware timer for heater control
@@ -8,16 +16,29 @@
 bool heaterTimerInit() {
     // Use Timer 3 for heater control
     TIM_TypeDef *instance = TIM3;
-    heaterTimer = new HardwareTimer(instance);
     
+    // Initialize heater timer
+    heaterTimer = new HardwareTimer(instance);
     if (!heaterTimer) return false;
     
     // Configure the timer
     heaterTimer->setPrescaleFactor(TIMER_PRESCALER);
     heaterTimer->setOverflow(TIMER_PERIOD, MICROSEC_FORMAT);
     
+    // Check if the pin supports PWM
+    PinName pinName = digitalPinToPinName(relayPin);
+    uint32_t function = pinmap_function(pinName, PinMap_PWM);
+    
+    // If the pin doesn't support PWM, we'll fall back to digital control
+    if (function == NC) {
+        delete heaterTimer;
+        heaterTimer = nullptr;
+        // Return false to indicate hardware PWM is not available
+        return false;
+    }
+    
     // Setup channel for PWM output on relayPin
-    heaterTimerChannel = STM_PIN_CHANNEL(pinmap_function(digitalPinToPinName(relayPin), PinMap_PWM));
+    heaterTimerChannel = STM_PIN_CHANNEL(function);
     heaterTimer->setMode(heaterTimerChannel, TIMER_OUTPUT_COMPARE_PWM1, relayPin);
     
     // Set default duty cycle to 0 (heater off)
@@ -35,7 +56,15 @@ bool heaterTimerInit() {
  * @param dutyCycle Duty cycle (0-100%)
  */
 void setHeaterDutyCycle(uint8_t dutyCycle) {
-    if (!timerSetupComplete) return;
+    if (!timerSetupComplete || !heaterTimer) {
+        // Fallback to digital control if hardware PWM is not available
+        if (dutyCycle > 50) {
+            digitalWrite(relayPin, HIGH);
+        } else {
+            digitalWrite(relayPin, LOW);
+        }
+        return;
+    }
     
     // Constrain duty cycle to 0-100%
     currentDutyCycle = constrain(dutyCycle, 0, 100);
@@ -48,6 +77,11 @@ void setHeaterDutyCycle(uint8_t dutyCycle) {
  * Turn heater fully on (100% duty cycle)
  */
 void heaterHardwareOn() {
+    if (!timerSetupComplete || !heaterTimer) {
+        // Fallback to direct pin control
+        digitalWrite(relayPin, HIGH);
+        return;
+    }
     setHeaterDutyCycle(100);
 }
 
@@ -55,6 +89,11 @@ void heaterHardwareOn() {
  * Turn heater fully off (0% duty cycle)
  */
 void heaterHardwareOff() {
+    if (!timerSetupComplete || !heaterTimer) {
+        // Fallback to direct pin control
+        digitalWrite(relayPin, LOW);
+        return;
+    }
     setHeaterDutyCycle(0);
 }
 
@@ -80,7 +119,15 @@ void heaterTimerCleanup() {
 
 // Advanced PWM control for heater
 void configurePWMHeaterControl(uint32_t pulseLength, int factor1, int factor2, bool brewActive) {
-    if (!timerSetupComplete) return;
+    if (!timerSetupComplete || !heaterTimer) {
+        // Fallback to simple on/off control
+        if (brewActive) {
+            setBoilerOn();
+        } else {
+            setBoilerOff();
+        }
+        return;
+    }
     
     // Calculate period in microseconds
     uint32_t periodMicros = pulseLength * 1000; // Convert to microseconds
@@ -142,7 +189,17 @@ uint8_t mapTemperatureToPWM(int16_t currentTemp, int16_t targetTemp, int16_t hys
 
 // Apply hardware PWM control based on temperature parameters 
 void applyHeaterControl(int16_t currentTemp, int16_t targetTemp, int16_t hysteresis, bool brewActive) {
-    if (!timerSetupComplete) return;
+    if (!timerSetupComplete || !heaterTimer) {
+        // Fallback to simple on/off control if hardware PWM is not available
+        if (targetTemp > currentTemp) {
+            // Need heat
+            brewActive ? setBoilerOn() : setBoilerOff();
+        } else {
+            // No heat needed
+            brewActive ? setBoilerOff() : setBoilerOn();
+        }
+        return;
+    }
     
     // Map temperature to appropriate PWM duty cycle
     uint8_t dutyCycle = mapTemperatureToPWM(currentTemp, targetTemp, hysteresis);

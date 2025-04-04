@@ -5,6 +5,7 @@
 #include "pindef.h"
 #include "hw_timer.h"
 #include <Arduino.h>
+#include "../log.h"
 
 // Flag to enable hardware timer-based PWM
 #define USE_HARDWARE_TIMER_PWM
@@ -22,7 +23,14 @@ static inline void pinInit(void) {
     pinMode(relayPin, OUTPUT);
     digitalWrite(relayPin, LOW);
     // Initialize hardware timer for heater control
-    heaterTimerInit();
+    // If initialization fails, we'll use digital IO instead
+    if (!heaterTimerInit()) {
+      // Fallback to digital IO mode if timer initialization fails
+      #ifdef HARDWARE_PWM_REQUIRED
+        // If hardware PWM is required but not available, log an error
+        LOG_ERROR("Hardware PWM init failed for relay pin. Check pin compatibility.");
+      #endif
+    }
   #else
     pinMode(relayPin, OUTPUT);
   #endif

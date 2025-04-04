@@ -23,7 +23,8 @@ enum class HEATING {
 };
 
 // Optimized temperature delta calculation using integer math
-inline static int16_t TEMP_DELTA_OPTIMIZED(int16_t tempSetpoint, const SensorState &currentState);
+// Declared in the cpp file to avoid multiple definitions
+int16_t TEMP_DELTA_OPTIMIZED(int16_t tempSetpoint, const SensorState &currentState);
 
 void justDoCoffee(const eepromValues_t &runningCfg, const SensorState &currentState, const bool brewActive);
 void pulseHeaters(const uint32_t pulseLength, const int factor_1, const int factor_2, const bool brewActive);
