@@ -272,36 +272,25 @@ float getPressure(void) {  //returns sensor pressure data
   }
   #endif
   
-  // Default polling-based implementation
-  // voltageZero = 0.5V --> 25.6 (8 bit) or 102.4 (10 bit) or 2666.7 (ADS 15 bit)
-  // voltageMax = 4.5V --> 230.4 (8 bit) or 921.6 (10 bit) or 24000 (ADS 15 bit)
-  // range 921.6 - 102.4 = 204.8 or 819.2 or 21333.3
-  // pressure gauge range 0-1.2MPa - 0-12 bar
-  // 1 bar = 17.1 or 68.27 or 1777.8
-
-  // Check and potentially reset the I2C bus if there's an error
+  // Check and reset I2C if needed
   if (getAdsError()) {
     errorCount++;
     if (errorCount > MAX_ERROR_COUNT) {
-      // If too many consecutive errors, try to reinitialize the ADS
       LOG_ERROR("Too many consecutive ADS errors, reinitializing");
       adsInit();
       errorCount = 0;
-      return previousPressure; // Return the previous valid reading
     }
-    return previousPressure; // Return the previous valid reading on error
-  } else {
-    errorCount = 0; // Reset error count on successful read
+    return previousPressure;
   }
-
-  previousPressure = currentPressure;
-  float rawPressure;
   
-  // Take multiple readings and average them
+  errorCount = 0;
+  previousPressure = currentPressure;
+  
+  // Take multiple readings with reduced delay
   float sumReadings = 0.0f;
   int validReadings = 0;
   
-  for (int i = 0; i < 3; i++) {
+  for (int i = 0; i < 4; i++) { // Increased from 3 to 4 readings
     float reading;
     #if defined SINGLE_BOARD
       reading = (ADS.getValue() - 166) / 111.11f; // 12bit
@@ -309,37 +298,28 @@ float getPressure(void) {  //returns sensor pressure data
       reading = (ADS.getValue() - 2666) / 1777.8f; // 16bit
     #endif
     
-    // Only include readings that are in a reasonable range
     if (!isnan(reading) && reading >= MIN_PRESSURE_VALUE && reading <= MAX_PRESSURE_VALUE) {
       sumReadings += reading;
       validReadings++;
     }
     
-    delay(5); // Small delay between readings
+    delay(2); // Reduced from 5ms to 2ms
   }
   
-  // If we didn't get any valid readings, use the previous value
   if (validReadings == 0) {
     LOG_ERROR("No valid pressure readings");
     return previousPressure;
   }
   
-  // Average the valid readings
-  rawPressure = sumReadings / validReadings;
+  float rawPressure = sumReadings / validReadings;
   
-  // Check if the pressure jump is too large - could be noise or interference
   if (abs(rawPressure - previousPressure) > MAX_PRESSURE_JUMP) {
     LOG_ERROR("Pressure jump too large: %f to %f", (double)previousPressure, (double)rawPressure);
-    
-    // Instead of completely rejecting, blend with previous to smooth transition
-    rawPressure = previousPressure * 0.8f + rawPressure * 0.2f;
+    rawPressure = previousPressure * 0.9f + rawPressure * 0.1f; // More conservative blending
   }
   
-  // Apply additional moving average filtering
   float filteredPressure = movingAveragePressure(rawPressure);
-  
-  // Apply final exponential filter
-  currentPressure = 0.8f * filteredPressure + 0.2f * previousPressure;
+  currentPressure = 0.85f * filteredPressure + 0.15f * previousPressure; // Adjusted weights
   
   return currentPressure;
 }
