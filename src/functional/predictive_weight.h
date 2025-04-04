@@ -42,20 +42,37 @@ public:
   }
 
   void update(const SensorState& state, CurrentPhase& phase, const eepromValues_t& cfg) {
-    // If at least 50ml have been pumped, there has to be output (unless the water is going to the void)
-    // No point going through all the below logic if we hardsetting the predictive scales to start counting
-    if (isForceStarted || outputFlowStarted || state.waterPumped >= 65.f) {
+    // Force predictive output after reasonable volume pumped
+    if (isForceStarted || outputFlowStarted || state.waterPumped >= 50.f) { // Reduced from 65ml to 50ml
       outputFlowStarted = true;
       return;
     }
+    
     float previousPuckResistance = puckResistance;
-    puckResistance = state.smoothedPressure * 1000.f / state.smoothedPumpFlow; // Resistance in mBar * s / g
-    resistanceDelta = puckResistance - previousPuckResistance;
-    pressureDrop = state.smoothedPressure * 10.f;
-    pressureDrop -= pressureDrop - state.pumpClicks;
+    // Improved resistance calculation with dampening for stability
+    puckResistance = (state.smoothedPressure * 1000.f / max(state.smoothedPumpFlow, 0.001f)); 
+    
+    // Apply exponential smoothing to resistance changes
+    resistanceDelta = (puckResistance - previousPuckResistance) * 0.8f + resistanceDelta * 0.2f;
+    
+    // More responsive pressure drop detection
+    pressureDrop = state.smoothedPressure * 10.f - state.pumpClicks * 0.8f;
     pressureDrop = pressureDrop > 0.f ? pressureDrop : 1.f;
-    truePuckResistance = calculatePuckResistance(state.smoothedPumpFlow, crossSectionalArea, dynamicViscosity, pressureDrop);
-
+    
+    truePuckResistance = calculatePuckResistance(
+      state.smoothedPumpFlow, 
+      crossSectionalArea, 
+      dynamicViscosity, 
+      pressureDrop
+    );
+    
+    // Improved detection thresholds
+    if (state.smoothedPressure >= 1.8f) { // Reduced from 2.1 to 1.8 bar
+      // Allow output detection at lower pressure for lighter roasts
+      outputFlowStarted = true;
+      return;
+    }
+    
     /* ::OBSERVATIONS::
     Through empirical testing it's been observed that ~2 bars is the indicator of the pf headspace being full
     as well as there being enough pressure for water to wet the puck enough to start the output.
