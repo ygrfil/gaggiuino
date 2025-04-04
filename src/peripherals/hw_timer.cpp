@@ -1,6 +1,7 @@
 /* Hardware Timer Implementation for Heater Control */
 #include "hw_timer.h"
 #include "heater_control.h"  // Include the forward declarations for heater control functions
+#include "../log.h"
 
 // Define global variables that were declared with extern in header
 HardwareTimer *heaterTimer = nullptr;
@@ -17,9 +18,14 @@ bool heaterTimerInit() {
     // Use Timer 3 for heater control
     TIM_TypeDef *instance = TIM3;
     
+    LOG_INFO("Setting up heater hardware timer with TIM3");
+    
     // Initialize heater timer
     heaterTimer = new HardwareTimer(instance);
-    if (!heaterTimer) return false;
+    if (!heaterTimer) {
+        LOG_ERROR("Failed to create heater timer instance");
+        return false;
+    }
     
     // Configure the timer
     heaterTimer->setPrescaleFactor(TIMER_PRESCALER);
@@ -31,6 +37,7 @@ bool heaterTimerInit() {
     
     // If the pin doesn't support PWM, we'll fall back to digital control
     if (function == NC) {
+        LOG_ERROR("Pin %d does not support hardware PWM", relayPin);
         delete heaterTimer;
         heaterTimer = nullptr;
         // Return false to indicate hardware PWM is not available
@@ -39,6 +46,8 @@ bool heaterTimerInit() {
     
     // Setup channel for PWM output on relayPin
     heaterTimerChannel = STM_PIN_CHANNEL(function);
+    LOG_INFO("Using timer channel %d for PWM on pin %d", heaterTimerChannel, relayPin);
+    
     heaterTimer->setMode(heaterTimerChannel, TIMER_OUTPUT_COMPARE_PWM1, relayPin);
     
     // Set default duty cycle to 0 (heater off)
@@ -48,6 +57,7 @@ bool heaterTimerInit() {
     heaterTimer->resume();
     
     timerSetupComplete = true;
+    LOG_INFO("Hardware timer setup complete");
     return true;
 }
 
@@ -58,6 +68,7 @@ bool heaterTimerInit() {
 void setHeaterDutyCycle(uint8_t dutyCycle) {
     if (!timerSetupComplete || !heaterTimer) {
         // Fallback to digital control if hardware PWM is not available
+        LOG_INFO("Hardware PWM not available, using direct control with duty cycle %d", dutyCycle);
         if (dutyCycle > 50) {
             digitalWrite(relayPin, HIGH);
         } else {
@@ -70,6 +81,7 @@ void setHeaterDutyCycle(uint8_t dutyCycle) {
     currentDutyCycle = constrain(dutyCycle, 0, 100);
     
     // Set PWM duty cycle
+    LOG_INFO("Setting heater PWM duty cycle to %d%%", currentDutyCycle);
     heaterTimer->setCaptureCompare(heaterTimerChannel, currentDutyCycle, PERCENT_COMPARE_FORMAT);
 }
 
@@ -79,9 +91,11 @@ void setHeaterDutyCycle(uint8_t dutyCycle) {
 void heaterHardwareOn() {
     if (!timerSetupComplete || !heaterTimer) {
         // Fallback to direct pin control
+        LOG_INFO("Hardware PWM not available, using direct pin control for ON");
         digitalWrite(relayPin, HIGH);
         return;
     }
+    LOG_INFO("Setting heater to 100% duty cycle");
     setHeaterDutyCycle(100);
 }
 
@@ -91,9 +105,11 @@ void heaterHardwareOn() {
 void heaterHardwareOff() {
     if (!timerSetupComplete || !heaterTimer) {
         // Fallback to direct pin control
+        LOG_INFO("Hardware PWM not available, using direct pin control for OFF");
         digitalWrite(relayPin, LOW);
         return;
     }
+    LOG_INFO("Setting heater to 0% duty cycle");
     setHeaterDutyCycle(0);
 }
 
@@ -102,6 +118,7 @@ void heaterHardwareOff() {
  * @param onTime Percentage of time heater is on (0-100%)
  */
 void configureHeaterPWM(uint8_t onTime) {
+    LOG_INFO("Configuring heater PWM with on-time %d%%", onTime);
     setHeaterDutyCycle(onTime);
 }
 
@@ -110,6 +127,7 @@ void configureHeaterPWM(uint8_t onTime) {
  */
 void heaterTimerCleanup() {
     if (heaterTimer) {
+        LOG_INFO("Cleaning up heater timer resources");
         heaterTimer->pause();
         delete heaterTimer;
         heaterTimer = nullptr;
@@ -121,6 +139,7 @@ void heaterTimerCleanup() {
 void configurePWMHeaterControl(uint32_t pulseLength, int factor1, int factor2, bool brewActive) {
     if (!timerSetupComplete || !heaterTimer) {
         // Fallback to simple on/off control
+        LOG_INFO("Hardware PWM not available, using simple on/off for brewing=%d", brewActive);
         if (brewActive) {
             setBoilerOn();
         } else {
@@ -161,6 +180,9 @@ void configurePWMHeaterControl(uint32_t pulseLength, int factor1, int factor2, b
     if (frequency < 1) frequency = 1;
     if (frequency > 10000) frequency = 10000;
     
+    LOG_INFO("Setting PWM with pulse=%d, factor1=%d, factor2=%d, brew=%d, duty=%d%%", 
+             pulseLength, factor1, factor2, brewActive, dutyCycle);
+    
     // Reconfigure timer with new period
     heaterTimer->setPrescaleFactor(TIMER_PRESCALER);
     heaterTimer->setOverflow(totalCycleTime, MICROSEC_FORMAT);
@@ -189,13 +211,19 @@ uint8_t mapTemperatureToPWM(int16_t currentTemp, int16_t targetTemp, int16_t hys
 
 // Apply hardware PWM control based on temperature parameters 
 void applyHeaterControl(int16_t currentTemp, int16_t targetTemp, int16_t hysteresis, bool brewActive) {
+    LOG_INFO("Temperature control: current=%d, target=%d, hysteresis=%d, brewing=%d", 
+             currentTemp, targetTemp, hysteresis, brewActive);
+             
     if (!timerSetupComplete || !heaterTimer) {
         // Fallback to simple on/off control if hardware PWM is not available
+        LOG_INFO("Hardware PWM not available, using simple on/off based on temperature");
         if (targetTemp > currentTemp) {
             // Need heat
+            LOG_INFO("Temperature below target, turning heater %s", brewActive ? "ON" : "OFF");
             brewActive ? setBoilerOn() : setBoilerOff();
         } else {
             // No heat needed
+            LOG_INFO("Temperature at or above target, turning heater %s", brewActive ? "OFF" : "ON");
             brewActive ? setBoilerOff() : setBoilerOn();
         }
         return;
@@ -208,6 +236,8 @@ void applyHeaterControl(int16_t currentTemp, int16_t targetTemp, int16_t hystere
     if (brewActive) {
         dutyCycle = 100 - dutyCycle;
     }
+    
+    LOG_INFO("Temperature-based PWM duty cycle: %d%%", dutyCycle);
     
     // Apply the calculated duty cycle
     setHeaterDutyCycle(dutyCycle);

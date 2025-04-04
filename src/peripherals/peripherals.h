@@ -8,7 +8,8 @@
 #include "../log.h"
 
 // Flag to enable hardware timer-based PWM
-#define USE_HARDWARE_TIMER_PWM
+// Comment out to use direct digital control for debugging
+// #define USE_HARDWARE_TIMER_PWM
 
 static inline void pinInit(void) {
   #if defined(LEGO_VALVE_RELAY)
@@ -33,6 +34,8 @@ static inline void pinInit(void) {
     }
   #else
     pinMode(relayPin, OUTPUT);
+    digitalWrite(relayPin, LOW); // Ensure heater starts off
+    LOG_INFO("Using direct digital control for heater element");
   #endif
 
   #ifdef steamValveRelayPin
