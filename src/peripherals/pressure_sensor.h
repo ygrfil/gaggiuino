@@ -5,7 +5,7 @@
 #include <Arduino.h>
 
 // Configuration for DMA-based readings
-#define USE_DMA_FOR_PRESSURE_SENSOR 0  // DMA disabled due to compile errors - needs HAL driver access
+#define USE_DMA_FOR_PRESSURE_SENSOR 1  // DMA enabled with HAL driver access
 
 // Configuration for Kalman filtering
 #define USE_KALMAN_FILTER 1  // Enable Kalman filter for improved sensor fusion

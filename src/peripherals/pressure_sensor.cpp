@@ -6,6 +6,13 @@
 #include "../log.h"
 #include "i2c_bus_reset.h"
 
+// Include STM32 HAL headers for DMA functionality
+#if USE_DMA_FOR_PRESSURE_SENSOR
+#include "stm32f4xx_hal.h"
+#include "stm32f4xx_hal_dma.h"
+#include "stm32f4xx_hal_i2c.h"
+#endif
+
 #if defined SINGLE_BOARD
 ADS1015 ADS(0x48);
 #else
@@ -118,9 +125,9 @@ void initDmaPressureReading(void) {
   
   LOG_INFO("Initializing DMA for pressure sensor");
   
-  // Use the I2C1 peripheral directly from STM32
+  // Configure I2C1 handle for DMA operations
   // This assumes the Wire library uses I2C1 on this board
-  hi2c1 = I2C1_BASE;
+  hi2c1.Instance = I2C1;
   
   // Configure I2C - use same settings as Wire library
   hi2c1.Init.ClockSpeed = 50000;  // 50 kHz
