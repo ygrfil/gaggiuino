@@ -15,10 +15,10 @@ bool timerInterruptsEnabled = false;
  * @return True if initialization successful
  */
 bool heaterTimerInit() {
-    // Use Timer 2 for heater control (TIM3 conflicts with HX711 scales)
-    TIM_TypeDef *instance = TIM2;
+    // Use Timer 3 for heater control (optimal choice when no HX711 scales present)
+    TIM_TypeDef *instance = TIM3;
     
-    LOG_INFO("Setting up heater hardware timer with TIM2");
+    LOG_INFO("Setting up heater hardware timer with TIM3");
     
     // Initialize heater timer
     heaterTimer = new HardwareTimer(instance);
@@ -193,26 +193,31 @@ void configurePWMHeaterControl(uint32_t pulseLength, int factor1, int factor2, b
 
 // Map temperature to PWM duty cycle for heater control
 uint8_t mapTemperatureToPWM(int16_t currentTemp, int16_t targetTemp, int16_t hysteresis) {
-    // Scale values by 10 to maintain precision with integer math
     int16_t diff = targetTemp - currentTemp;
     
-    // Simple proportional control implementation
+    // Conservative proportional control implementation
     if (diff <= 0) {
         // At or above target temperature
         return 0;
     } else if (diff >= hysteresis) {
-        // Far below target temperature
-        return 100;
+        // Far below target temperature - limit to 80% to prevent overshoot
+        return 80;
     } else {
         // Proportional control when within hysteresis range
-        return (diff * 100) / hysteresis;
+        // Scale to max 80% duty cycle for stability
+        return (diff * 80) / hysteresis;
     }
 }
 
 // Apply hardware PWM control based on temperature parameters 
 void applyHeaterControl(int16_t currentTemp, int16_t targetTemp, int16_t hysteresis, bool brewActive) {
-    LOG_INFO("Temperature control: current=%d, target=%d, hysteresis=%d, brewing=%d", 
-             currentTemp, targetTemp, hysteresis, brewActive);
+    // Convert scaled temperatures (x10) back to normal scale for PWM calculations
+    int16_t currentTempUnscaled = currentTemp / 10;
+    int16_t targetTempUnscaled = targetTemp / 10;
+    int16_t hysteresisUnscaled = hysteresis / 10;
+    
+    LOG_INFO("Temperature control: current=%.1f, target=%.1f, hysteresis=%.1f, brewing=%d", 
+             currentTempUnscaled/10.0, targetTempUnscaled/10.0, hysteresisUnscaled/10.0, brewActive);
              
     if (!timerSetupComplete || !heaterTimer) {
         // Fallback to simple on/off control if hardware PWM is not available
@@ -229,13 +234,11 @@ void applyHeaterControl(int16_t currentTemp, int16_t targetTemp, int16_t hystere
         return;
     }
     
-    // Map temperature to appropriate PWM duty cycle
-    uint8_t dutyCycle = mapTemperatureToPWM(currentTemp, targetTemp, hysteresis);
+    // Map temperature to appropriate PWM duty cycle using unscaled values
+    uint8_t dutyCycle = mapTemperatureToPWM(currentTempUnscaled, targetTempUnscaled, hysteresisUnscaled);
     
-    // Invert duty cycle for brew mode
-    if (brewActive) {
-        dutyCycle = 100 - dutyCycle;
-    }
+    // Note: Removed brew mode inversion as it was causing instability
+    // The original logic inversion is not needed for hardware PWM
     
     LOG_INFO("Temperature-based PWM duty cycle: %d%%", dutyCycle);
     
