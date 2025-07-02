@@ -75,12 +75,21 @@ void justDoCoffee(const eepromValues_t &runningCfg, const SensorState &currentSt
       static uint32_t lastTempTime = 0;
       uint32_t currentTime = millis();
       
-      if (currentTime - lastTempTime > 250) { // 4Hz temperature trend sampling
-        // Add predictive component if temperature is falling
-        if (lastTemperature > sensorTemperature && lastTemperature != 0) {
-          // Increase heating proportionally to temperature drop rate
-          int16_t tempDrop = lastTemperature - sensorTemperature;
-          deltaOffset += (tempDrop * 2); // Amplify response to falling temperature
+      if (currentTime - lastTempTime > 200) { // 5Hz temperature trend sampling - faster response
+        // Enhanced predictive component with better stability
+        if (lastTemperature != 0) {
+          int16_t tempChange = sensorTemperature - lastTemperature;
+          
+          // Predictive heating for falling temperatures (improved responsiveness)
+          if (tempChange < 0) {
+            int16_t predictiveBoost = abs(tempChange) * 3; // Stronger response to temperature drops
+            deltaOffset += predictiveBoost;
+          }
+          // Gentle reduction for rising temperatures (prevent overshoot)
+          else if (tempChange > 0 && sensorTemperature > (brewTempSetPoint - 20)) {
+            int16_t dampening = tempChange * 1; // Reduce heating when approaching target
+            deltaOffset = max(0, deltaOffset - dampening);
+          }
         }
         lastTemperature = sensorTemperature;
         lastTempTime = currentTime;

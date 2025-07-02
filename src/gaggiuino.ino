@@ -5,10 +5,11 @@
 #endif
 #include "gaggiuino.h"
 
-SimpleKalmanFilter smoothPressure(0.6f, 0.6f, 0.1f);
-SimpleKalmanFilter smoothPumpFlow(0.1f, 0.1f, 0.01f);
-SimpleKalmanFilter smoothScalesFlow(0.5f, 0.5f, 0.01f);
-SimpleKalmanFilter smoothConsideredFlow(0.1f, 0.1f, 0.1f);
+// Enhanced Kalman filters for smoother pressure profiling and better user experience
+SimpleKalmanFilter smoothPressure(0.4f, 0.4f, 0.08f);      // More responsive pressure reading for better control
+SimpleKalmanFilter smoothPumpFlow(0.08f, 0.08f, 0.008f);   // Smoother pump flow for consistent pressure profiles
+SimpleKalmanFilter smoothScalesFlow(0.3f, 0.3f, 0.006f);   // Better weight flow tracking for shot timing
+SimpleKalmanFilter smoothConsideredFlow(0.08f, 0.08f, 0.05f); // Improved overall flow calculation
 
 //default phases. Updated in updateProfilerPhases.
 Profile profile;

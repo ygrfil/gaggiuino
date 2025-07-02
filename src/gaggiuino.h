@@ -30,10 +30,10 @@
 #else
     #define GET_KTYPE_READ_EVERY    250 // max6675 amp module data read interval not recommended to be changed to lower than 250 (ms)
 #endif
-#define GET_PRESSURE_READ_EVERY 10 // Pressure refresh interval (ms)
-#define GET_SCALES_READ_EVERY   100 // Scales refresh interval (ms)
-#define REFRESH_SCREEN_EVERY    150 // Screen refresh interval (ms)
-#define REFRESH_FLOW_EVERY      50 // Flow refresh interval (ms)
+#define GET_PRESSURE_READ_EVERY 5 // Pressure refresh interval (ms) - Faster response for better pressure control
+#define GET_SCALES_READ_EVERY   80 // Scales refresh interval (ms) - Slightly faster for weight tracking
+#define REFRESH_SCREEN_EVERY    100 // Screen refresh interval (ms) - More responsive display
+#define REFRESH_FLOW_EVERY      30 // Flow refresh interval (ms) - Better flow control response
 #define HEALTHCHECK_EVERY       30000 // System checks happen every 30sec
 #define BOILER_FILL_START_TIME  3000UL // Boiler fill start time - 3 sec since system init.
 #define BOILER_FILL_TIMEOUT     8000UL // Boiler fill timeout - 8sec since system init.
