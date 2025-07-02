@@ -7,6 +7,9 @@
 // Configuration for DMA-based readings
 #define USE_DMA_FOR_PRESSURE_SENSOR 0  // DMA disabled due to compile errors - needs HAL driver access
 
+// Configuration for Kalman filtering
+#define USE_KALMAN_FILTER 1  // Enable Kalman filter for improved sensor fusion
+
 // DMA buffer size - number of samples to collect
 #define PRESSURE_DMA_BUFFER_SIZE 8
 
@@ -18,6 +21,18 @@ typedef struct {
   uint8_t writeIndex;                         // Current write index in the buffer
   float filteredPressure;                     // Latest filtered pressure value
 } PressureDmaState_t;
+
+#if USE_KALMAN_FILTER
+// Kalman filter state structure for pressure sensor
+typedef struct {
+  float x;          // State estimate (pressure)
+  float P;          // Estimation error covariance
+  float Q;          // Process noise covariance
+  float R;          // Measurement noise covariance
+  float K;          // Kalman gain
+  bool initialized; // Filter initialization flag
+} KalmanState_t;
+#endif
 
 // Initialize I2C and ADS1X15 pressure sensor
 void adsInit(void);
@@ -33,6 +48,20 @@ bool getAdsError(void);
 
 // Apply moving average filter to pressure readings
 float movingAveragePressure(float newReading);
+
+#if USE_KALMAN_FILTER
+// Initialize Kalman filter for pressure sensor
+void initKalmanFilter(void);
+
+// Apply Kalman filter to pressure readings
+float kalmanFilterPressure(float measurement);
+
+// Reset Kalman filter state
+void resetKalmanFilter(void);
+
+// Tune Kalman filter parameters (for advanced users)
+void tuneKalmanFilter(float processNoise, float measurementNoise);
+#endif
 
 #if USE_DMA_FOR_PRESSURE_SENSOR
 // Initialize DMA for pressure sensor

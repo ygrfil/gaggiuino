@@ -26,6 +26,16 @@ float pressureBuffer[PRESSURE_FILTER_SIZE];
 int pressureBufferIndex = 0;
 bool pressureBufferFilled = false;
 
+#if USE_KALMAN_FILTER
+// Kalman filter state for pressure sensor
+KalmanState_t pressureKalman;
+
+// Kalman filter tuning parameters optimized for coffee machine pressure
+const float KALMAN_PROCESS_NOISE = 0.01f;    // Q - How much the pressure changes (low for stable brewing)
+const float KALMAN_MEASUREMENT_NOISE = 0.1f; // R - Sensor noise level (based on ADS1115 specs)
+const float KALMAN_INITIAL_ERROR = 1.0f;     // Initial estimation error
+#endif
+
 #if USE_DMA_FOR_PRESSURE_SENSOR
 // DMA state for pressure sensor
 PressureDmaState_t pressureDmaState;
@@ -86,6 +96,11 @@ void adsInit(void) {
   // Initialize pressure readings
   currentPressure = 0.0f;
   previousPressure = 0.0f;
+  
+  #if USE_KALMAN_FILTER
+  // Initialize Kalman filter
+  initKalmanFilter();
+  #endif
   
   LOG_INFO("ADS pressure sensor initialized");
   
@@ -264,6 +279,78 @@ float movingAveragePressure(float newReading) {
   return sum / count;
 }
 
+#if USE_KALMAN_FILTER
+// Initialize Kalman filter for pressure sensor
+void initKalmanFilter(void) {
+  pressureKalman.x = 0.0f;                      // Initial state estimate
+  pressureKalman.P = KALMAN_INITIAL_ERROR;      // Initial estimation error covariance
+  pressureKalman.Q = KALMAN_PROCESS_NOISE;      // Process noise covariance
+  pressureKalman.R = KALMAN_MEASUREMENT_NOISE;  // Measurement noise covariance
+  pressureKalman.K = 0.0f;                      // Initial Kalman gain
+  pressureKalman.initialized = false;           // Not initialized until first measurement
+  
+  LOG_INFO("Kalman filter initialized for pressure sensor");
+}
+
+// Apply Kalman filter to pressure readings
+float kalmanFilterPressure(float measurement) {
+  // Handle initialization with first measurement
+  if (!pressureKalman.initialized) {
+    pressureKalman.x = measurement;
+    pressureKalman.initialized = true;
+    return measurement;
+  }
+  
+  // Prediction step (simple model: pressure doesn't change much between readings)
+  // x_pred = x (assuming constant pressure between readings)
+  // P_pred = P + Q
+  float x_pred = pressureKalman.x;
+  float P_pred = pressureKalman.P + pressureKalman.Q;
+  
+  // Update step
+  // Calculate Kalman gain: K = P_pred / (P_pred + R)
+  pressureKalman.K = P_pred / (P_pred + pressureKalman.R);
+  
+  // Update state estimate: x = x_pred + K * (measurement - x_pred)
+  pressureKalman.x = x_pred + pressureKalman.K * (measurement - x_pred);
+  
+  // Update estimation error covariance: P = (1 - K) * P_pred
+  pressureKalman.P = (1.0f - pressureKalman.K) * P_pred;
+  
+  // Adaptive noise tuning based on measurement innovation
+  float innovation = fabs(measurement - x_pred);
+  if (innovation > 0.5f) {
+    // Large innovation suggests increased measurement noise or rapid pressure change
+    pressureKalman.R = min(KALMAN_MEASUREMENT_NOISE * 2.0f, 0.3f);
+  } else {
+    // Small innovation suggests stable conditions
+    pressureKalman.R = max(KALMAN_MEASUREMENT_NOISE * 0.8f, 0.05f);
+  }
+  
+  return pressureKalman.x;
+}
+
+// Reset Kalman filter state (useful when starting new shot)
+void resetKalmanFilter(void) {
+  pressureKalman.initialized = false;
+  pressureKalman.P = KALMAN_INITIAL_ERROR;
+  pressureKalman.R = KALMAN_MEASUREMENT_NOISE;
+  LOG_INFO("Kalman filter reset");
+}
+
+// Tune Kalman filter parameters for different brewing scenarios
+void tuneKalmanFilter(float processNoise, float measurementNoise) {
+  // Validate parameters
+  if (processNoise > 0.0f && processNoise < 1.0f) {
+    pressureKalman.Q = processNoise;
+  }
+  if (measurementNoise > 0.0f && measurementNoise < 1.0f) {
+    pressureKalman.R = measurementNoise;
+  }
+  LOG_INFO("Kalman filter tuned: Q=%.3f, R=%.3f", (double)pressureKalman.Q, (double)pressureKalman.R);
+}
+#endif
+
 float getPressure(void) {  //returns sensor pressure data
   #if USE_DMA_FOR_PRESSURE_SENSOR
   if (dmaPressureInitialized) {
@@ -318,8 +405,21 @@ float getPressure(void) {  //returns sensor pressure data
     rawPressure = previousPressure * 0.9f + rawPressure * 0.1f; // More conservative blending
   }
   
+  // Apply filtering - choose between Kalman and traditional filtering
+  #if USE_KALMAN_FILTER
+  // First apply moving average to reduce high-frequency noise
+  float movingAvgPressure = movingAveragePressure(rawPressure);
+  
+  // Then apply Kalman filter for optimal sensor fusion
+  float kalmanPressure = kalmanFilterPressure(movingAvgPressure);
+  
+  // Light exponential smoothing for final output stability
+  currentPressure = 0.9f * kalmanPressure + 0.1f * previousPressure;
+  #else
+  // Traditional filtering (fallback)
   float filteredPressure = movingAveragePressure(rawPressure);
-  currentPressure = 0.85f * filteredPressure + 0.15f * previousPressure; // Adjusted weights
+  currentPressure = 0.85f * filteredPressure + 0.15f * previousPressure;
+  #endif
   
   return currentPressure;
 }
