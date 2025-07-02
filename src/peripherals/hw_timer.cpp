@@ -15,10 +15,10 @@ bool timerInterruptsEnabled = false;
  * @return True if initialization successful
  */
 bool heaterTimerInit() {
-    // Use Timer 3 for heater control
-    TIM_TypeDef *instance = TIM3;
+    // Use Timer 2 for heater control (TIM3 conflicts with HX711 scales)
+    TIM_TypeDef *instance = TIM2;
     
-    LOG_INFO("Setting up heater hardware timer with TIM3");
+    LOG_INFO("Setting up heater hardware timer with TIM2");
     
     // Initialize heater timer
     heaterTimer = new HardwareTimer(instance);

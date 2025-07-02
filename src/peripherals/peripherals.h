@@ -8,8 +8,8 @@
 #include "../log.h"
 
 // Flag to enable hardware timer-based PWM
-// Comment out to use direct digital control for debugging
-// #define USE_HARDWARE_TIMER_PWM
+// Using TIM2 for PWM (TIM3 conflicts with HX711 scales)
+#define USE_HARDWARE_TIMER_PWM
 
 static inline void pinInit(void) {
   #if defined(LEGO_VALVE_RELAY)
