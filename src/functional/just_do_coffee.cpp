@@ -4,141 +4,31 @@
 
 extern unsigned long steamTime;
 
-// Optimized TEMP_DELTA calculation using integer math
-// Implementation of the function declared in the header
-int16_t TEMP_DELTA_OPTIMIZED(int16_t tempSetpoint, const SensorState &currentState) {
-  // Use integer scaling factor (100x) to avoid floating point
-  int16_t pumpFlowScaled = currentState.pumpFlow * 100;
-  int16_t divisor = (pumpFlowScaled < 100) ? 700 : 500; // <1.0 ? 7.0 : 5.0
-  return (tempSetpoint * pumpFlowScaled) / divisor;
-}
 
 void justDoCoffee(const eepromValues_t &runningCfg, const SensorState &currentState, const bool brewActive) {
   // Set target mode to brew temp
   lcdTargetState((int)HEATING::MODE_brew);
   
-  // Scale temperatures by 10 to use integer math (higher precision)
-  const int16_t TEMP_SCALE = 10;
-  int16_t brewTempSetPoint = (ACTIVE_PROFILE(runningCfg).setpoint + runningCfg.offsetTemp) * TEMP_SCALE;
-  int16_t sensorTemperature = (currentState.temperature + runningCfg.offsetTemp) * TEMP_SCALE;
-  
-  // Threshold temperatures (scaled by 10)
-  const int16_t BREW_TEMP_SAFETY_MARGIN = 50; // 5.0 degrees
-  const int16_t IDLE_TEMP_LOWER_THRESHOLD = 100; // 10.0 degrees
+  float brewTempSetPoint = ACTIVE_PROFILE(runningCfg).setpoint + runningCfg.offsetTemp;
+  float sensorTemperature = currentState.temperature + runningCfg.offsetTemp;
 
-#if defined(USE_HARDWARE_TIMER_PWM)
-  // Use hardware timer based PWM for more precise temperature control
+  // Control logic for brewing mode with ±1°C precision
   if (brewActive) {
-    // Brewing mode - use proportional control with hardware PWM
-    int16_t tempDelta = 0;
-    
-    // Apply delta temperature compensation if enabled
-    if (runningCfg.brewDeltaState) {
-      tempDelta = TEMP_DELTA_OPTIMIZED(brewTempSetPoint / TEMP_SCALE, currentState);
+    if(sensorTemperature <= brewTempSetPoint - 1.f) {
+      setBoilerOn(); // Turn on when >1°C below target
+    } else if (sensorTemperature >= brewTempSetPoint + 1.f) {
+      setBoilerOff(); // Turn off when >1°C above target
     }
-    
-    // Apply hardware PWM control with appropriate temperature target
-    applyHeaterControl(sensorTemperature, brewTempSetPoint + tempDelta, BREW_TEMP_SAFETY_MARGIN, brewActive);
+    // Within ±1°C band - maintain current heater state (no action)
   } else {
-    // Idle mode - simpler proportional control
-    applyHeaterControl(sensorTemperature, brewTempSetPoint, IDLE_TEMP_LOWER_THRESHOLD, brewActive);
-  }
-#else
-  // Original temperature control implementation
-  // Control logic for brewing mode
-  if (brewActive) {
-    // Brewing mode with optimized PID-like control
-    if(sensorTemperature <= brewTempSetPoint - BREW_TEMP_SAFETY_MARGIN) {
-      setBoilerOn(); // Full power when far from target
-    } else {
-      int16_t deltaOffset = 0;
-      
-      if (runningCfg.brewDeltaState) {
-        int16_t tempDelta = TEMP_DELTA_OPTIMIZED(brewTempSetPoint / TEMP_SCALE, currentState);
-        
-        // Enhanced proportional control based on temperature difference
-        if (sensorTemperature > brewTempSetPoint) {
-          deltaOffset = 0;
-        } else {
-          // More responsive temperature adjustment curve
-          const int16_t tempRange = tempDelta * TEMP_SCALE;
-          // Faster response when further from target
-          deltaOffset = ((brewTempSetPoint - sensorTemperature) * tempDelta * 1.2f) / tempRange;
-          // Limit maximum adjustment
-          if (deltaOffset > tempDelta) deltaOffset = tempDelta;
-          if (deltaOffset < 0) deltaOffset = 0;
-        }
-      }
-      
-      // Add predictive component based on temperature trend
-      static int16_t lastTemperature = 0;
-      static uint32_t lastTempTime = 0;
-      uint32_t currentTime = millis();
-      
-      if (currentTime - lastTempTime > 200) { // 5Hz temperature trend sampling - faster response
-        // Enhanced predictive component with better stability
-        if (lastTemperature != 0) {
-          int16_t tempChange = sensorTemperature - lastTemperature;
-          
-          // Predictive heating for falling temperatures (improved responsiveness)
-          if (tempChange < 0) {
-            int16_t predictiveBoost = abs(tempChange) * 3; // Stronger response to temperature drops
-            deltaOffset += predictiveBoost;
-          }
-          // Gentle reduction for rising temperatures (prevent overshoot)
-          else if (tempChange > 0 && sensorTemperature > (brewTempSetPoint - 20)) {
-            int16_t dampening = tempChange * 1; // Reduce heating when approaching target
-            deltaOffset = max(0, deltaOffset - dampening);
-          }
-        }
-        lastTemperature = sensorTemperature;
-        lastTempTime = currentTime;
-      }
-      
-      // Apply heat based on enhanced control algorithm
-      if (sensorTemperature <= brewTempSetPoint + deltaOffset) {
-        pulseHeaters(runningCfg.hpwr, runningCfg.mainDivider, runningCfg.brewDivider, brewActive);
-      } else {
-        setBoilerOff();
-      }
+    // Idle mode - ±1°C precision
+    if (sensorTemperature <= brewTempSetPoint - 1.f) {
+      setBoilerOn(); // Turn on when >1°C below target
+    } else if (sensorTemperature >= brewTempSetPoint + 1.f) {
+      setBoilerOff(); // Turn off when >1°C above target  
     }
-  } else {
-    // Idle mode - simpler logic
-    if (sensorTemperature <= brewTempSetPoint - IDLE_TEMP_LOWER_THRESHOLD) {
-      // Cold - full power
-      setBoilerOn();
-    } else {
-      // Calculate appropriate power level
-      int HPWR_LOW = runningCfg.hpwr / runningCfg.mainDivider;
-      int heatPower;
-      
-      // Simplified power calculation based on temperature range
-      if (sensorTemperature <= brewTempSetPoint - BREW_TEMP_SAFETY_MARGIN) {
-        // Between 5-10 degrees below target - medium power
-        heatPower = runningCfg.hpwr / 2 + HPWR_LOW / 2; // Average of max and min
-      } else if (sensorTemperature < brewTempSetPoint) {
-        // Less than 5 degrees below target - low power
-        heatPower = HPWR_LOW;
-      } else {
-        // At or above target - no heat
-        setBoilerOff();
-        heatPower = 0; // Not actually used but set for clarity
-      }
-      
-      // Apply heat if needed
-      if (sensorTemperature < brewTempSetPoint) {
-        // Use appropriate pulse pattern based on temperature
-        if (sensorTemperature <= brewTempSetPoint - BREW_TEMP_SAFETY_MARGIN) {
-          pulseHeaters(heatPower, 1, runningCfg.mainDivider, brewActive);
-        } else {
-          pulseHeaters(heatPower, runningCfg.brewDivider, runningCfg.brewDivider, brewActive);
-        }
-      } else {
-        setBoilerOff();
-      }
-    }
+    // Within ±1°C band - maintain current heater state (no action)
   }
-#endif
   
   // Valve control logic remains unchanged
   if (brewActive || !currentState.brewSwitchState) {
