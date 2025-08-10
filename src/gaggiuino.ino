@@ -6,10 +6,10 @@
 #include "gaggiuino.h"
 
 // Enhanced Kalman filters for smoother pressure profiling and better user experience
-SimpleKalmanFilter smoothPressure(0.4f, 0.4f, 0.08f);      // More responsive pressure reading for better control
-SimpleKalmanFilter smoothPumpFlow(0.08f, 0.08f, 0.008f);   // Smoother pump flow for consistent pressure profiles
-SimpleKalmanFilter smoothScalesFlow(0.3f, 0.3f, 0.006f);   // Better weight flow tracking for shot timing
-SimpleKalmanFilter smoothConsideredFlow(0.08f, 0.08f, 0.05f); // Improved overall flow calculation
+SimpleKalmanFilter smoothPressure(0.3f, 0.3f, 0.06f);      // Optimized: faster response with good noise rejection
+SimpleKalmanFilter smoothPumpFlow(0.1f, 0.1f, 0.01f);      // Optimized: better flow stability
+SimpleKalmanFilter smoothScalesFlow(0.25f, 0.25f, 0.008f); // Optimized: improved weight tracking
+SimpleKalmanFilter smoothConsideredFlow(0.1f, 0.1f, 0.04f); // Optimized: smoother flow transitions
 
 //default phases. Updated in updateProfilerPhases.
 Profile profile;
@@ -98,6 +98,11 @@ void setup(void) {
   // Change LED colour on setup exit.
   led.setColor(9u, 0u, 9u); // 64171
 
+  // Initialize auto-shutdown feature
+  lastActivityTime = millis();
+  systemState.autoShutdownEnabled = true;  // Enable by default
+  systemState.shutdownWarningShown = false;
+
   iwdcInit();
 }
 
@@ -137,9 +142,21 @@ static void sensorsRead(void) {
 }
 
 static void sensorReadSwitches(void) {
+  bool previousBrewState = currentState.brewSwitchState;
+  bool previousSteamState = currentState.steamSwitchState;
+  bool previousHotWaterState = currentState.hotWaterSwitchState;
+  
   currentState.brewSwitchState = brewState();
   currentState.steamSwitchState = steamState();
   currentState.hotWaterSwitchState = waterPinState() || (currentState.brewSwitchState && currentState.steamSwitchState); // use either an actual switch, or the GC/GCP switch combo
+  
+  // Reset activity timer if any switch state changed (user interaction detected)
+  if (currentState.brewSwitchState != previousBrewState ||
+      currentState.steamSwitchState != previousSteamState ||
+      currentState.hotWaterSwitchState != previousHotWaterState) {
+    lastActivityTime = millis();
+    systemState.shutdownWarningShown = false;  // Reset warning flag on activity
+  }
 }
 
 static void sensorsReadTemperature(void) {
@@ -167,7 +184,12 @@ static void sensorsReadWeight(void) {
       currentState.weight = weightMeasurements.latest().value;
 
       if (brewActive) {
-        currentState.shotWeight = currentState.tarePending ? 0.f : currentState.weight;
+        // Safety: prevent negative weight spikes from affecting shot weight
+        if (!currentState.tarePending && currentState.weight > -0.2f) {
+          currentState.shotWeight = fmax(0.f, currentState.weight);
+        } else if (currentState.tarePending) {
+          currentState.shotWeight = 0.f;
+        }
         currentState.weightFlow = fmax(0.f, weightMeasurements.measurementChange().changeSpeed());
         currentState.smoothedWeightFlow = smoothScalesFlow.updateEstimate(currentState.weightFlow);
       }
@@ -257,6 +279,12 @@ static void readTankWaterLevel(void) {
 //############################################______PAGE_CHANGE_VALUES_REFRESH_____#############################################
 //##############################################################################################################################
 static void pageValuesRefresh() {
+  // Track LCD navigation as user activity for auto-shutdown
+  if (lcdCurrentPageId != lcdLastCurrentPageId) {
+    lastActivityTime = millis();
+    systemState.shutdownWarningShown = false;
+  }
+  
   // Read the page we're landing in: leaving keyboard page means a value could've changed in it
   if (lcdLastCurrentPageId == NextionPage::KeyboardNumeric) lcdFetchPage(runningCfg, lcdCurrentPageId, runningCfg.activeProfile);
   // Or maybe it's a page that needs constant polling
@@ -277,7 +305,11 @@ static void pageValuesRefresh() {
 //############################____OPERATIONAL_MODE_CONTROL____#################################
 //#############################################################################################
 static void modeSelect(void) {
-  if (!systemState.startupInitFinished) return;
+  if (!systemState.startupInitFinished) {
+    // Maintain brew temperature even during startup/boiler fill
+    justDoCoffee(runningCfg, currentState, false);
+    return;
+  }
 
   switch (selectedOperationalMode) {
     //REPLACE ALL THE BELOW WITH OPMODE_auto_profiling
@@ -795,13 +827,61 @@ static bool sysReadinessCheck(void) {
   return true;
 }
 
+// Auto-shutdown function to save energy and improve safety
+static void checkAutoShutdown(void) {
+  if (!systemState.autoShutdownEnabled || !systemState.startupInitFinished) {
+    return;  // Auto-shutdown disabled or system not ready
+  }
+  
+  unsigned long inactivityTime = millis() - lastActivityTime;
+  
+  // Show warning 1 minute before shutdown
+  if (inactivityTime >= AUTO_SHUTDOWN_WARNING && !systemState.shutdownWarningShown) {
+    lcdShowPopup("Auto shutdown in 1 min!");
+    systemState.shutdownWarningShown = true;
+  }
+  
+  // Perform auto-shutdown after 25 minutes
+  if (inactivityTime >= AUTO_SHUTDOWN_TIME) {
+    LOG_INFO("Auto-shutdown triggered after 25 minutes of inactivity");
+    
+    // Show shutdown message
+    lcdShowPopup("Auto shutdown - Goodbye!");
+    
+    // Turn everything off safely
+    setPumpOff();
+    setBoilerOff();
+    setSteamBoilerRelayOff();
+    setSteamValveRelayOff();
+    closeValve();
+    
+    // Turn off LED to indicate shutdown
+    led.setColor(0, 0, 0);
+    
+    // Enter infinite loop - machine needs manual power cycle to restart
+    while (true) {
+      watchdogReload();  // Keep watchdog happy
+      delay(1000);       // Wait in low-power state
+      
+      // Check if any button is pressed to wake up
+      if (brewState() || steamState() || waterPinState()) {
+        // Reset system - requires manual power cycle
+        lcdShowPopup("Please power cycle machine");
+      }
+    }
+  }
+}
+
 static inline void sysHealthCheck(float pressureThreshold) {
   //Reloading the watchdog timer, if this function fails to run MCU is rebooted
   watchdogReload();
+  
+  // Check for auto-shutdown
+  checkAutoShutdown();
 
   /* This *while* is here to prevent situations where the system failed to get a temp reading and temp reads as 0 or -7(cause of the offset)
   If we would use a non blocking function then the system would keep the SSR in HIGH mode which would most definitely cause boiler overheating */
-  while (currentState.temperature <= 0.0f || currentState.temperature == NAN || currentState.temperature >= 170.0f) {
+  while (currentState.temperature <= 0.0f || isnan(currentState.temperature) || currentState.temperature >= 170.0f) {
     //Reloading the watchdog timer, if this function fails to run MCU is rebooted
     watchdogReload();
     /* In the event of the temp failing to read while the SSR is HIGH
@@ -838,32 +918,64 @@ static inline void sysHealthCheck(float pressureThreshold) {
   }
   // Should enter the block every "systemHealthTimer" seconds
   if (millis() >= systemHealthTimer) {
-    while (currentState.smoothedPressure >= pressureThreshold && currentState.temperature < 100.f)
-    {
-      //Reloading the watchdog timer, if this function fails to run MCU is rebooted
-      watchdogReload();
-      switch (lcdCurrentPageId) {
-        case NextionPage::BrewManual:
-        case NextionPage::BrewGraph:
-        case NextionPage::GraphPreview:
-          brewDetect();
-          lcdRefresh();
-          lcdListen();
-          sensorsRead();
-          justDoCoffee(runningCfg, currentState, brewActive);
-          break;
-        default:
-          sensorsRead();
-          lcdShowPopup("Releasing pressure!");
-          setPumpOff();
-          setBoilerOff();
-          setSteamValveRelayOff();
-          setSteamBoilerRelayOff();
-          openValve();
-          break;
+    // Check if pressure release is needed
+    if (currentState.smoothedPressure >= pressureThreshold && currentState.temperature < 100.f) {
+      // Show popup only once at the start of pressure release
+      static bool pressureReleasePopupShown = false;
+      if (!pressureReleasePopupShown) {
+        lcdShowPopup("Releasing pressure!");
+        pressureReleasePopupShown = true;
       }
+      
+      // Vent pressure using original behavior
+      openValve();
+      setPumpOff();
+      setBoilerOff();
+      setSteamValveRelayOff();
+      setSteamBoilerRelayOff();
+      
+      // Keep checking pressure while releasing
+      while (currentState.smoothedPressure >= pressureThreshold && currentState.temperature < 100.f)
+      {
+        //Reloading the watchdog timer, if this function fails to run MCU is rebooted
+        watchdogReload();
+        
+        // Keep reading sensors to update pressure
+        sensorsRead();
+        
+        // Allow brewing pages to continue functioning during pressure release
+        switch (lcdCurrentPageId) {
+          case NextionPage::BrewManual:
+          case NextionPage::BrewGraph:
+          case NextionPage::GraphPreview:
+            brewDetect();
+            lcdRefresh();
+            lcdListen();
+            justDoCoffee(runningCfg, currentState, brewActive);
+            break;
+          default:
+            // Just keep monitoring pressure on other pages
+            break;
+        }
+        
+        // Safety timeout - don't get stuck forever
+        static unsigned long pressureReleaseStart = millis();
+        if (millis() - pressureReleaseStart > 10000) { // 10 second timeout
+          LOG_WARN("Pressure release timeout - exiting");
+          break;
+        }
+      }
+      
+      // Pressure released - close valve and clear popup
+      closeValve();
+      pressureReleasePopupShown = false; // Reset for next time
+      
+      // Clear the popup by showing a brief success message
+      lcdShowPopup("Pressure released!");
+      delay(500); // Brief delay to show success
+      lcdShowPopup(""); // Clear popup
     }
-    closeValve();
+    
     systemHealthTimer = millis() + HEALTHCHECK_EVERY;
   }
   // Throwing a pressure release countodown.

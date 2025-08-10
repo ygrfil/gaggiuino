@@ -1,33 +1,112 @@
 /* 09:32 15/03/2023 - change triggering comment */
 #include "just_do_coffee.h"
 #include "../lcd/lcd.h"
+#include "../peripherals/heater_control.h"
 
 extern unsigned long steamTime;
+
+// Original control does not rely on persistent PID state
 
 
 void justDoCoffee(const eepromValues_t &runningCfg, const SensorState &currentState, const bool brewActive) {
   // Set target mode to brew temp
   lcdTargetState((int)HEATING::MODE_brew);
   
-  float brewTempSetPoint = ACTIVE_PROFILE(runningCfg).setpoint + runningCfg.offsetTemp;
-  float sensorTemperature = currentState.temperature + runningCfg.offsetTemp;
+  // Use consistent units: setpoint in °C from profile; sensor already offset-adjusted in sensorsReadTemperature
+  const float setpointC = ACTIVE_PROFILE(runningCfg).setpoint;
+  const float tempC = currentState.temperature;
 
-  // Control logic for brewing mode with ±1°C precision
-  if (brewActive) {
-    if(sensorTemperature <= brewTempSetPoint - 1.f) {
-      setBoilerOn(); // Turn on when >1°C below target
-    } else if (sensorTemperature >= brewTempSetPoint + 1.f) {
-      setBoilerOff(); // Turn off when >1°C above target
+  // Multi-level pulsing tuned for boiler thermal lag
+  static uint32_t coolDownLockoutUntil = 0; // when > millis(), heater remains off to let system settle
+  static float lastTempC = 0.0f;
+  static uint32_t lastTempTs = 0;
+  static uint32_t minOffHoldUntil = 0; // enforce brief off-hold near setpoint when rising fast
+
+  // Time-proportional heater control with explicit duty and period
+  auto timePropHeat = [](uint32_t periodMs, uint8_t dutyPct) {
+    static uint32_t windowStart = 0;
+    uint32_t now = millis();
+    if (now - windowStart >= periodMs) {
+      windowStart = now;
     }
-    // Within ±1°C band - maintain current heater state (no action)
+    if (dutyPct == 0) {
+      setBoilerOff();
+      return;
+    }
+    if (dutyPct >= 100) {
+      setBoilerOn();
+      return;
+    }
+    uint32_t onTime = (periodMs * dutyPct) / 100u;
+    if ((now - windowStart) < onTime) setBoilerOn(); else setBoilerOff();
+  };
+
+  // If we're above setpoint, ensure heater is off and optionally hold off briefly
+  if (tempC > setpointC) {
+    setBoilerOff();
+    if (tempC >= setpointC + 0.5f) {
+      coolDownLockoutUntil = millis() + 8000; // 8s lockout when > +0.5°C
+    }
+  }
+
+  uint32_t nowTs = millis();
+  // Compute temperature slope in °C/s (defensive against first run)
+  float slopeCps = 0.0f;
+  if (lastTempTs != 0) {
+    float dt = (nowTs - lastTempTs) / 1000.0f;
+    if (dt > 0.0f) slopeCps = (tempC - lastTempC) / dt;
+  }
+  lastTempC = tempC;
+  lastTempTs = nowTs;
+
+  if (nowTs < coolDownLockoutUntil) {
+    setBoilerOff();
   } else {
-    // Idle mode - ±1°C precision
-    if (sensorTemperature <= brewTempSetPoint - 1.f) {
-      setBoilerOn(); // Turn on when >1°C below target
-    } else if (sensorTemperature >= brewTempSetPoint + 1.f) {
-      setBoilerOff(); // Turn off when >1°C above target  
+    const float diff = setpointC - tempC; // positive when below target
+
+    // Preemptive cut if rising fast near target; also enforce a minimum off hold
+    if (diff <= 1.0f && slopeCps > 0.2f) {
+      minOffHoldUntil = nowTs + 1500; // 1.5s off hold
     }
-    // Within ±1°C band - maintain current heater state (no action)
+    if (nowTs < minOffHoldUntil) {
+      setBoilerOff();
+      return;
+    }
+
+    if (diff > 8.0f) {
+      timePropHeat(1000, 100);
+    } else if (diff > 4.0f) {
+      timePropHeat(2000, 60);
+    } else if (diff > 2.0f) {
+      timePropHeat(3000, 35);
+    } else if (diff > 1.0f) {
+      // If rising fast, reduce or cut
+      if (slopeCps > 0.25f) {
+        setBoilerOff();
+      } else {
+        timePropHeat(4000, 18);
+      }
+    } else if (diff > 0.5f) {
+      if (slopeCps > 0.20f) {
+        setBoilerOff();
+      } else {
+        timePropHeat(5000, 10);
+      }
+    } else if (diff > 0.2f) {
+      if (slopeCps > 0.15f) {
+        setBoilerOff();
+      } else {
+        timePropHeat(6000, 5);
+      }
+    } else if (diff > 0.0f) {
+      if (slopeCps > 0.10f) {
+        setBoilerOff();
+      } else {
+        timePropHeat(7000, 3);
+      }
+    } else {
+      setBoilerOff();
+    }
   }
   
   // Valve control logic remains unchanged
@@ -150,3 +229,5 @@ void hotWaterMode(const SensorState &currentState) {
   if (currentState.temperature < MAX_WATER_TEMP) setBoilerOn();
   else setBoilerOff();
 }
+
+// Removed PID helper functions to simplify and match original behavior

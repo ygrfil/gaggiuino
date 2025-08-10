@@ -1,33 +1,85 @@
-/* Heater Control Implementation */
+/* Simple Heater Control Implementation - Restored Original Functionality */
 #include "heater_control.h"
 #include "pindef.h"
-#include "hw_timer.h"
 #include <Arduino.h>
 #include "../log.h"
 
-// Implementation of the heater control functions that are forward-declared in heater_control.h
+// Simple heater control - just like original firmware
 
 // Actuating the heater element - ON
 void setBoilerOn(void) {
-  #if defined(USE_HARDWARE_TIMER_PWM)
-    LOG_INFO("Boiler: ON (PWM)");
-    heaterHardwareOn();
-  #else
-    LOG_INFO("Boiler: ON (Direct)");
-    digitalWrite(relayPin, HIGH);  // boilerPin -> HIGH
-  #endif
+  pinMode(relayPin, OUTPUT);
+  digitalWrite(relayPin, HIGH);  // boilerPin -> HIGH
 }
 
 // Actuating the heater element - OFF
 void setBoilerOff(void) {
-  #if defined(USE_HARDWARE_TIMER_PWM)
-    LOG_INFO("Boiler: OFF (PWM)");
-    heaterHardwareOff();
-  #else
-    LOG_INFO("Boiler: OFF (Direct)");
-    digitalWrite(relayPin, LOW);  // boilerPin -> LOW
-  #endif
+  pinMode(relayPin, OUTPUT);
+  digitalWrite(relayPin, LOW);  // boilerPin -> LOW
 }
 
-// We don't implement setPumpOff here - it's already implemented in pump.cpp
-// The forward declaration in heater_control.h is just to break circular dependencies 
+// Stub functions to maintain compatibility - do nothing
+void initPIDTemperatureControl() {
+    // Do nothing - using simple temperature control
+}
+
+void setPIDHeaterOutput(float dutyCycle) {
+    // Do nothing - not using PID
+    (void)dutyCycle;
+}
+
+float computePIDTemperatureControl(float setpoint, float currentTemp, bool isBrewMode) {
+    // Do nothing - not using PID
+    (void)setpoint;
+    (void)currentTemp;
+    (void)isBrewMode;
+    return 0.0f;
+}
+
+void resetPIDController() {
+    // Do nothing - not using PID
+}
+
+void setPIDTunings(float kp, float ki, float kd) {
+    // Do nothing - not using PID
+    (void)kp;
+    (void)ki;
+    (void)kd;
+}
+
+void enablePIDDebugMode(bool enabled) {
+    // Do nothing - not using PID
+    (void)enabled;
+}
+
+float getPIDOutput() {
+    return 0.0f;
+}
+
+float getPIDError() {
+    return 0.0f;
+}
+
+void getPIDTunings(float &kp, float &ki, float &kd) {
+    kp = ki = kd = 0.0f;
+}
+
+void enablePIDDiagnosticMode(bool enabled) {
+    // Do nothing - not using PID
+    (void)enabled;
+}
+
+void logPIDDiagnostics(float setpoint, float currentTemp, float output, bool heaterState) {
+    // Do nothing - not using PID
+    (void)setpoint;
+    (void)currentTemp;
+    (void)output;
+    (void)heaterState;
+}
+
+bool checkTemperatureSafetyLimits(float currentTemp, bool heaterState) {
+    // Always return true for now
+    (void)currentTemp;
+    (void)heaterState;
+    return true;
+}

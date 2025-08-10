@@ -14,12 +14,13 @@
 #include "peripherals/scales.h"
 #include "peripherals/peripherals.h"
 #include "peripherals/thermocouple.h"
-#include "sensors_state.h"
-#include "system_state.h"
+#include "peripherals/heater_control.h"
+#include "../lib/Common/sensors_state.h"
+#include "../lib/Common/system_state.h"
 #include "functional/descale.h"
 #include "functional/just_do_coffee.h"
 #include "functional/predictive_weight.h"
-#include "profiling_phases.h"
+#include "../lib/Common/profiling_phases.h"
 #include "peripherals/esp_comms.h"
 #include "peripherals/led.h"
 #include "peripherals/tof.h"
@@ -40,6 +41,8 @@
 #define BOILER_FILL_SKIP_TEMP   85.f // Boiler fill skip temperature threshold
 #define SYS_PRESSURE_IDLE       0.7f // System pressure threshold at idle
 #define MIN_WATER_LVL           10u // Min allowable tank water lvl
+#define AUTO_SHUTDOWN_TIME      1500000UL // Auto shutdown after 25 minutes (25 * 60 * 1000ms)
+#define AUTO_SHUTDOWN_WARNING   1440000UL // Warning 1 minute before shutdown (24 * 60 * 1000ms)
 
 enum class OPERATION_MODES {
   OPMODE_straight9Bar,
@@ -73,6 +76,7 @@ unsigned long thermoTimer;
 unsigned long scalesTimer;
 unsigned long flowTimer;
 unsigned long steamTime;
+unsigned long lastActivityTime;  // Track last user activity for auto-shutdown
 
 //scales vars
 Measurements weightMeasurements(4);

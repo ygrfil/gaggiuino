@@ -66,12 +66,8 @@ public:
       pressureDrop
     );
     
-    // Improved detection thresholds
-    if (state.smoothedPressure >= 1.8f) { // Reduced from 2.1 to 1.8 bar
-      // Allow output detection at lower pressure for lighter roasts
-      outputFlowStarted = true;
-      return;
-    }
+    // Early exit for established flow - removed to avoid conflict with line 111
+    // The main threshold check happens later in the function
     
     /* ::OBSERVATIONS::
     Through empirical testing it's been observed that ~2 bars is the indicator of the pf headspace being full
@@ -107,8 +103,8 @@ public:
         return;
       }
     }
-    // Pressure has to cross the 2 bar threshold.
-    if (state.smoothedPressure < 2.1f) return;
+    // Pressure has to cross the threshold - reduced for lighter roasts
+    if (state.smoothedPressure < 1.8f) return;
 
     if (phaseTypePressure) {
       // If the pressure or flow are raising too fast dismiss the spike from the output.

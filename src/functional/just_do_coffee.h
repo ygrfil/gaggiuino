@@ -31,5 +31,9 @@ void pulseHeaters(const uint32_t pulseLength, const int factor_1, const int fact
 void steamCtrl(const eepromValues_t &runningCfg, SensorState &currentState);
 void hotWaterMode(const SensorState &currentState);
 
+// PID controller helper functions for mode transition and temperature control
+void handleModeTransition(bool brewActive);
+float computePIDTemperatureControlWithMode(float setpoint, float currentTemp, bool isBrewMode);
+
 #endif
 

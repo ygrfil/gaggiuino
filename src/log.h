@@ -26,8 +26,10 @@
 #endif
 
 #if LOG_LEVEL > 1
+  #define LOG_WARN(msg, ...)     do { log("W", FILENAME, __LINE__, msg, ##__VA_ARGS__); } while (0)
   #define LOG_INFO(msg, ...)     do { log("I", FILENAME, __LINE__, msg, ##__VA_ARGS__); } while (0)
 #else
+  #define LOG_WARN(msg, ...)
   #define LOG_INFO(msg, ...)
 #endif
 

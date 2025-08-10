@@ -33,13 +33,36 @@ float pressureBuffer[PRESSURE_FILTER_SIZE];
 int pressureBufferIndex = 0;
 bool pressureBufferFilled = false;
 
+// Median filter for outlier rejection
+const int MEDIAN_FILTER_SIZE = 5;
+float medianBuffer[MEDIAN_FILTER_SIZE];
+int medianBufferIndex = 0;
+bool medianBufferFilled = false;
+
+// Pressure rate-of-change validation
+float lastValidPressure = 0.0f;
+unsigned long lastPressureTime = 0;
+const float MAX_PRESSURE_RATE = 3.0f; // Maximum bar/second rate of change
+const unsigned long MIN_TIME_BETWEEN_READINGS = 10; // Minimum milliseconds between readings
+
+// Diagnostic counters
+struct PressureDiagnostics {
+  unsigned long totalReadings;
+  unsigned long invalidReadings;
+  unsigned long outlierRejections;
+  unsigned long rateValidationRejections;
+  unsigned long calibrationErrors;
+  unsigned long lastDiagnosticReport;
+  const unsigned long DIAGNOSTIC_REPORT_INTERVAL = 30000; // Report every 30 seconds
+} pressureDiagnostics = {0, 0, 0, 0, 0, 0, 30000};
+
 #if USE_KALMAN_FILTER
 // Kalman filter state for pressure sensor
 KalmanState_t pressureKalman;
 
 // Kalman filter tuning parameters optimized for coffee machine pressure
 const float KALMAN_PROCESS_NOISE = 0.01f;    // Q - How much the pressure changes (low for stable brewing)
-const float KALMAN_MEASUREMENT_NOISE = 0.1f; // R - Sensor noise level (based on ADS1115 specs)
+const float KALMAN_MEASUREMENT_NOISE = 0.2f; // R - Sensor noise level (increased for better stability)
 const float KALMAN_INITIAL_ERROR = 1.0f;     // Initial estimation error
 #endif
 
@@ -62,8 +85,8 @@ bool dmaPressureInitialized = false;
 
 void adsInit(void) {
   Wire.begin();
-  Wire.setClock(50000); // Lower I2C clock to 50kHz for more stability
-  delay(200); // Longer delay to give I2C bus time to stabilize
+  Wire.setClock(100000); // 100kHz standard for ADS1X15
+  delay(50); // Short, non-blocking startup delay
   
   LOG_INFO("Initializing ADS pressure sensor");
   
@@ -73,6 +96,25 @@ void adsInit(void) {
   }
   pressureBufferIndex = 0;
   pressureBufferFilled = false;
+  
+  // Reset median filter
+  for (int i = 0; i < MEDIAN_FILTER_SIZE; i++) {
+    medianBuffer[i] = 0.0f;
+  }
+  medianBufferIndex = 0;
+  medianBufferFilled = false;
+  
+  // Initialize rate-of-change tracking
+  lastValidPressure = 0.0f;
+  lastPressureTime = millis();
+  
+  // Reset diagnostics
+  pressureDiagnostics.totalReadings = 0;
+  pressureDiagnostics.invalidReadings = 0;
+  pressureDiagnostics.outlierRejections = 0;
+  pressureDiagnostics.rateValidationRejections = 0;
+  pressureDiagnostics.calibrationErrors = 0;
+  pressureDiagnostics.lastDiagnosticReport = millis();
   
   // Try to connect to the ADS chip
   bool connected = false;
@@ -90,14 +132,14 @@ void adsInit(void) {
     LOG_ERROR("Failed to connect to ADS chip after multiple attempts");
   }
   
-  ADS.setGain(0);      // 6.144 volt
-  ADS.setDataRate(2);  // Lower data rate for more stability (was 4)
+  ADS.setGain(0);      // 6.144V range
+  ADS.setDataRate(4);  // Typical stable data rate
   ADS.setMode(0);      // continuous mode
   
   // Take several readings to fill the buffer and stabilize
-  for (int i = 0; i < 5; i++) {
-    ADS.readADC(0);
-    delay(20);
+  for (int i = 0; i < 3; i++) {
+    (void)ADS.readADC(0);
+    delay(5);
   }
   
   // Initialize pressure readings
@@ -225,11 +267,13 @@ float processDmaPressureReadings(void) {
   int count = 0;
   
   while (pressureDmaState.readIndex != pressureDmaState.writeIndex) {
-    // Convert raw reading to pressure
+    // Convert raw reading to pressure with corrected calibration constants
     #if defined SINGLE_BOARD
-    float reading = (pressureDmaState.rawReadings[pressureDmaState.readIndex] - 166) / 111.11f; // 12bit
+    // ADS1015 12-bit: Fixed calibration constants for better accuracy
+    float reading = (pressureDmaState.rawReadings[pressureDmaState.readIndex] - 200) / 120.0f; // 12bit corrected
     #else
-    float reading = (pressureDmaState.rawReadings[pressureDmaState.readIndex] - 2666) / 1777.8f; // 16bit
+    // ADS1115 16-bit: Fixed calibration constants for better accuracy  
+    float reading = (pressureDmaState.rawReadings[pressureDmaState.readIndex] - 3200) / 1920.0f; // 16bit corrected
     #endif
     
     // Only include valid readings
@@ -284,6 +328,90 @@ float movingAveragePressure(float newReading) {
   }
   
   return sum / count;
+}
+
+// Median filter to reject outliers
+float medianFilterPressure(float newReading) {
+  // Add new reading to median buffer
+  medianBuffer[medianBufferIndex] = newReading;
+  medianBufferIndex = (medianBufferIndex + 1) % MEDIAN_FILTER_SIZE;
+  
+  if (medianBufferIndex == 0) {
+    medianBufferFilled = true;
+  }
+  
+  // Create temporary array for sorting
+  float tempBuffer[MEDIAN_FILTER_SIZE];
+  int count = medianBufferFilled ? MEDIAN_FILTER_SIZE : medianBufferIndex;
+  
+  for (int i = 0; i < count; i++) {
+    tempBuffer[i] = medianBuffer[i];
+  }
+  
+  // Simple bubble sort for small array
+  for (int i = 0; i < count - 1; i++) {
+    for (int j = 0; j < count - i - 1; j++) {
+      if (tempBuffer[j] > tempBuffer[j + 1]) {
+        float temp = tempBuffer[j];
+        tempBuffer[j] = tempBuffer[j + 1];
+        tempBuffer[j + 1] = temp;
+      }
+    }
+  }
+  
+  // Return median value
+  return tempBuffer[count / 2];
+}
+
+// Validate pressure rate of change
+bool validatePressureRate(float newPressure) {
+  unsigned long currentTime = millis();
+  
+  // Check if enough time has passed since last reading
+  if (currentTime - lastPressureTime < MIN_TIME_BETWEEN_READINGS) {
+    return false; // Too soon for another reading
+  }
+  
+  // Calculate rate of change
+  float timeDelta = (currentTime - lastPressureTime) / 1000.0f; // Convert to seconds
+  float pressureDelta = abs(newPressure - lastValidPressure);
+  float rate = pressureDelta / timeDelta;
+  
+  // Check if rate is within acceptable limits
+  if (rate > MAX_PRESSURE_RATE && lastPressureTime > 0) {
+    pressureDiagnostics.rateValidationRejections++;
+    LOG_INFO("Pressure rate too high: %.2f bar/s (delta: %.2f bar, time: %.3f s)", 
+             (double)rate, (double)pressureDelta, (double)timeDelta);
+    return false;
+  }
+  
+  // Update tracking variables
+  lastValidPressure = newPressure;
+  lastPressureTime = currentTime;
+  
+  return true;
+}
+
+// Report pressure sensor diagnostics
+void reportPressureDiagnostics() {
+  unsigned long currentTime = millis();
+  
+  if (currentTime - pressureDiagnostics.lastDiagnosticReport > pressureDiagnostics.DIAGNOSTIC_REPORT_INTERVAL) {
+    if (pressureDiagnostics.totalReadings > 0) {
+      float invalidRate = (100.0f * pressureDiagnostics.invalidReadings) / pressureDiagnostics.totalReadings;
+      float outlierRate = (100.0f * pressureDiagnostics.outlierRejections) / pressureDiagnostics.totalReadings;
+      float rateRejectionRate = (100.0f * pressureDiagnostics.rateValidationRejections) / pressureDiagnostics.totalReadings;
+      
+      LOG_INFO("Pressure sensor diagnostics - Total: %lu, Invalid: %lu (%.1f%%), Outliers: %lu (%.1f%%), Rate rejects: %lu (%.1f%%), Cal errors: %lu",
+               pressureDiagnostics.totalReadings,
+               pressureDiagnostics.invalidReadings, (double)invalidRate,
+               pressureDiagnostics.outlierRejections, (double)outlierRate, 
+               pressureDiagnostics.rateValidationRejections, (double)rateRejectionRate,
+               pressureDiagnostics.calibrationErrors);
+    }
+    
+    pressureDiagnostics.lastDiagnosticReport = currentTime;
+  }
 }
 
 #if USE_KALMAN_FILTER
@@ -359,6 +487,12 @@ void tuneKalmanFilter(float processNoise, float measurementNoise) {
 #endif
 
 float getPressure(void) {  //returns sensor pressure data
+  // Increment total readings counter for diagnostics
+  pressureDiagnostics.totalReadings++;
+  
+  // Report diagnostics periodically
+  reportPressureDiagnostics();
+  
   #if USE_DMA_FOR_PRESSURE_SENSOR
   if (dmaPressureInitialized) {
     // Use DMA-based pressure reading
@@ -369,10 +503,13 @@ float getPressure(void) {  //returns sensor pressure data
   // Check and reset I2C if needed
   if (getAdsError()) {
     errorCount++;
+    pressureDiagnostics.calibrationErrors++;
     if (errorCount > MAX_ERROR_COUNT) {
-      LOG_ERROR("Too many consecutive ADS errors, reinitializing");
+      LOG_ERROR("Too many consecutive ADS errors (%d), reinitializing sensor", errorCount);
       adsInit();
       errorCount = 0;
+    } else {
+      LOG_INFO("ADS error detected, count: %d/%d", errorCount, MAX_ERROR_COUNT);
     }
     return previousPressure;
   }
@@ -387,44 +524,73 @@ float getPressure(void) {  //returns sensor pressure data
   for (int i = 0; i < 4; i++) { // Increased from 3 to 4 readings
     float reading;
     #if defined SINGLE_BOARD
-      reading = (ADS.getValue() - 166) / 111.11f; // 12bit
+      // ADS1015 12-bit: Calibration tuned for typical 0-12 bar span
+      // Adjust zero-offset and scale to your transducer if needed
+      reading = (ADS.getValue() - 180) / 128.0f;
     #else
-      reading = (ADS.getValue() - 2666) / 1777.8f; // 16bit
+      // ADS1115 16-bit
+      reading = (ADS.getValue() - 3000) / 2048.0f;
     #endif
     
     if (!isnan(reading) && reading >= MIN_PRESSURE_VALUE && reading <= MAX_PRESSURE_VALUE) {
       sumReadings += reading;
       validReadings++;
+    } else {
+      pressureDiagnostics.invalidReadings++;
+      LOG_INFO("Invalid pressure reading: %.2f (NaN: %s, Range: %.2f-%.2f)", 
+               (double)reading, isnan(reading) ? "yes" : "no", 
+               (double)MIN_PRESSURE_VALUE, (double)MAX_PRESSURE_VALUE);
     }
     
     delay(2); // Reduced from 5ms to 2ms
   }
   
   if (validReadings == 0) {
-    LOG_ERROR("No valid pressure readings");
+    LOG_ERROR("No valid pressure readings out of 4 attempts");
+    pressureDiagnostics.invalidReadings++;
     return previousPressure;
   }
   
   float rawPressure = sumReadings / validReadings;
   
   if (abs(rawPressure - previousPressure) > MAX_PRESSURE_JUMP) {
-    LOG_ERROR("Pressure jump too large: %f to %f", (double)previousPressure, (double)rawPressure);
+    LOG_INFO("Pressure jump detected: %.2f to %.2f bar (delta: %.2f)", 
+             (double)previousPressure, (double)rawPressure, 
+             (double)(rawPressure - previousPressure));
+    pressureDiagnostics.outlierRejections++;
     rawPressure = previousPressure * 0.9f + rawPressure * 0.1f; // More conservative blending
   }
   
-  // Apply filtering - choose between Kalman and traditional filtering
+  // Apply multi-stage filtering with median filter first to reject outliers
   #if USE_KALMAN_FILTER
-  // First apply moving average to reduce high-frequency noise
-  float movingAvgPressure = movingAveragePressure(rawPressure);
+  // Stage 1: Apply median filter to reject outliers
+  float medianPressure = medianFilterPressure(rawPressure);
   
-  // Then apply Kalman filter for optimal sensor fusion
+  // Stage 2: Validate rate of change
+  if (!validatePressureRate(medianPressure)) {
+    // Rate too high, use previous pressure with small adjustment toward new reading
+    currentPressure = 0.95f * previousPressure + 0.05f * medianPressure;
+    return currentPressure;
+  }
+  
+  // Stage 3: Apply moving average to reduce high-frequency noise
+  float movingAvgPressure = movingAveragePressure(medianPressure);
+  
+  // Stage 4: Apply Kalman filter for optimal sensor fusion
   float kalmanPressure = kalmanFilterPressure(movingAvgPressure);
   
-  // Light exponential smoothing for final output stability
+  // Stage 5: Light exponential smoothing for final output stability
   currentPressure = 0.9f * kalmanPressure + 0.1f * previousPressure;
   #else
-  // Traditional filtering (fallback)
-  float filteredPressure = movingAveragePressure(rawPressure);
+  // Traditional filtering with median filter (fallback)
+  float medianPressure = medianFilterPressure(rawPressure);
+  
+  if (!validatePressureRate(medianPressure)) {
+    currentPressure = 0.95f * previousPressure + 0.05f * medianPressure;
+    return currentPressure;
+  }
+  
+  float filteredPressure = movingAveragePressure(medianPressure);
   currentPressure = 0.85f * filteredPressure + 0.15f * previousPressure;
   #endif
   

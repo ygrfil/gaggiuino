@@ -49,6 +49,15 @@ bool getAdsError(void);
 // Apply moving average filter to pressure readings
 float movingAveragePressure(float newReading);
 
+// Apply median filter to reject outliers
+float medianFilterPressure(float newReading);
+
+// Validate pressure rate of change
+bool validatePressureRate(float newPressure);
+
+// Report pressure sensor diagnostics
+void reportPressureDiagnostics(void);
+
 #if USE_KALMAN_FILTER
 // Initialize Kalman filter for pressure sensor
 void initKalmanFilter(void);

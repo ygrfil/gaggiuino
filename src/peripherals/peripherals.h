@@ -3,15 +3,10 @@
 #define PERIPHERALS_H
 
 #include "pindef.h"
-#include "hw_timer.h"
 #include <Arduino.h>
 #include "../log.h"
 
-// Flag to enable hardware timer-based PWM
-// Using TIM3 for PWM (optimal choice when no HX711 scales present)
-// DISABLED - PWM causing temperature oscillations, needs more investigation
-// #define USE_HARDWARE_TIMER_PWM
-
+// Simple digital control - no complex PWM
 static inline void pinInit(void) {
   #if defined(LEGO_VALVE_RELAY)
     pinMode(valvePin, OUTPUT_OPEN_DRAIN);
@@ -19,25 +14,9 @@ static inline void pinInit(void) {
     pinMode(valvePin, OUTPUT);
   #endif
 
-  #if defined(USE_HARDWARE_TIMER_PWM)
-    // For hardware PWM, the pin will be configured by the timer
-    // Just initialize it as output for safety
-    pinMode(relayPin, OUTPUT);
-    digitalWrite(relayPin, LOW);
-    // Initialize hardware timer for heater control
-    // If initialization fails, we'll use digital IO instead
-    if (!heaterTimerInit()) {
-      // Fallback to digital IO mode if timer initialization fails
-      #ifdef HARDWARE_PWM_REQUIRED
-        // If hardware PWM is required but not available, log an error
-        LOG_ERROR("Hardware PWM init failed for relay pin. Check pin compatibility.");
-      #endif
-    }
-  #else
-    pinMode(relayPin, OUTPUT);
-    digitalWrite(relayPin, LOW); // Ensure heater starts off
-    LOG_INFO("Using direct digital control for heater element");
-  #endif
+  // Simple digital control for heater relay
+  pinMode(relayPin, OUTPUT);
+  digitalWrite(relayPin, LOW); // Ensure heater starts off
 
   #ifdef steamValveRelayPin
   pinMode(steamValveRelayPin, OUTPUT);
@@ -52,22 +31,10 @@ static inline void pinInit(void) {
   #endif
 }
 
-// Actuating the heater element
-static inline void setBoilerOn(void) {
-  #if defined(USE_HARDWARE_TIMER_PWM)
-    heaterHardwareOn();
-  #else
-    digitalWrite(relayPin, HIGH);  // boilerPin -> HIGH
-  #endif
-}
-
-static inline void setBoilerOff(void) {
-  #if defined(USE_HARDWARE_TIMER_PWM)
-    heaterHardwareOff();
-  #else
-    digitalWrite(relayPin, LOW);  // boilerPin -> LOW
-  #endif
-}
+// Heater control functions are now implemented in heater_control.cpp
+// to avoid conflicts and provide better PID integration
+void setBoilerOn(void);   // Forward declaration - implemented in heater_control.cpp
+void setBoilerOff(void);  // Forward declaration - implemented in heater_control.cpp
 
 // Set heater PWM duty cycle (0-100%)
 static inline void setBoilerPWM(uint8_t dutyCycle) {
