@@ -927,7 +927,8 @@ static inline void sysHealthCheck(float pressureThreshold) {
         pressureReleasePopupShown = true;
       }
       
-      // Vent pressure using original behavior
+      // Vent pressure using the valve path that drops the measured line pressure
+      // (for SINGLE_BOARD this requires opening the controlled valve)
       openValve();
       setPumpOff();
       setBoilerOff();
@@ -935,6 +936,8 @@ static inline void sysHealthCheck(float pressureThreshold) {
       setSteamBoilerRelayOff();
       
       // Keep checking pressure while releasing
+      unsigned long pressureReleaseStart = millis();
+      float releaseStartPressure = currentState.smoothedPressure;
       while (currentState.smoothedPressure >= pressureThreshold && currentState.temperature < 100.f)
       {
         //Reloading the watchdog timer, if this function fails to run MCU is rebooted
@@ -943,6 +946,11 @@ static inline void sysHealthCheck(float pressureThreshold) {
         // Keep reading sensors to update pressure
         sensorsRead();
         
+        // Early-exit when raw or smoothed pressure is clearly below threshold (hysteresis)
+        if (currentState.pressure < pressureThreshold - 0.2f || currentState.smoothedPressure < pressureThreshold - 0.1f) {
+          break;
+        }
+
         // Allow brewing pages to continue functioning during pressure release
         switch (lcdCurrentPageId) {
           case NextionPage::BrewManual:
@@ -958,8 +966,13 @@ static inline void sysHealthCheck(float pressureThreshold) {
             break;
         }
         
+        // If pressure is trending down significantly, extend timeout window
+        if (currentState.smoothedPressure < releaseStartPressure - 0.3f) {
+          releaseStartPressure = currentState.smoothedPressure;
+          pressureReleaseStart = millis();
+        }
+
         // Safety timeout - don't get stuck forever
-        static unsigned long pressureReleaseStart = millis();
         if (millis() - pressureReleaseStart > 10000) { // 10 second timeout
           LOG_WARN("Pressure release timeout - exiting");
           break;
