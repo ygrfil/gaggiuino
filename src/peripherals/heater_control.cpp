@@ -3,11 +3,19 @@
 #include "pindef.h"
 #include <Arduino.h>
 #include "../log.h"
+#include "../../lib/Common/system_state.h"
+
+extern SystemState systemState;
 
 // Simple heater control - just like original firmware
 
 // Actuating the heater element - ON
 void setBoilerOn(void) {
+  if (systemState.shutdownActive) {
+    // Block heater during standby
+    digitalWrite(relayPin, LOW);
+    return;
+  }
   pinMode(relayPin, OUTPUT);
   digitalWrite(relayPin, HIGH);  // boilerPin -> HIGH
 }

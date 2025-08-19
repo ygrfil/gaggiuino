@@ -2,6 +2,9 @@
 #include "just_do_coffee.h"
 #include "../lcd/lcd.h"
 #include "../peripherals/heater_control.h"
+#include "../../lib/Common/system_state.h"
+
+extern SystemState systemState;
 
 extern unsigned long steamTime;
 
@@ -42,7 +45,7 @@ void justDoCoffee(const eepromValues_t &runningCfg, const SensorState &currentSt
   };
 
   // If we're above setpoint, ensure heater is off and optionally hold off briefly
-  if (tempC > setpointC) {
+  if (tempC > setpointC || systemState.shutdownActive) {
     setBoilerOff();
     if (tempC >= setpointC + 0.5f) {
       coolDownLockoutUntil = millis() + 8000; // 8s lockout when > +0.5°C
@@ -59,7 +62,7 @@ void justDoCoffee(const eepromValues_t &runningCfg, const SensorState &currentSt
   lastTempC = tempC;
   lastTempTs = nowTs;
 
-  if (nowTs < coolDownLockoutUntil) {
+  if (nowTs < coolDownLockoutUntil || systemState.shutdownActive) {
     setBoilerOff();
   } else {
     const float diff = setpointC - tempC; // positive when below target

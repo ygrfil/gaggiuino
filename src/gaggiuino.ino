@@ -102,6 +102,7 @@ void setup(void) {
   lastActivityTime = millis();
   systemState.autoShutdownEnabled = true;  // Enable by default
   systemState.shutdownWarningShown = false;
+  systemState.shutdownActive = false;
 
   iwdcInit();
 }
@@ -830,44 +831,30 @@ static bool sysReadinessCheck(void) {
 // Auto-shutdown function to save energy and improve safety
 static void checkAutoShutdown(void) {
   if (!systemState.autoShutdownEnabled || !systemState.startupInitFinished) {
-    return;  // Auto-shutdown disabled or system not ready
+    return;  // Feature disabled or system not ready
   }
-  
+
   unsigned long inactivityTime = millis() - lastActivityTime;
-  
-  // Show warning 1 minute before shutdown
-  if (inactivityTime >= AUTO_SHUTDOWN_WARNING && !systemState.shutdownWarningShown) {
-    lcdShowPopup("Auto shutdown in 1 min!");
-    systemState.shutdownWarningShown = true;
-  }
-  
-  // Perform auto-shutdown after 25 minutes
-  if (inactivityTime >= AUTO_SHUTDOWN_TIME) {
-    LOG_INFO("Auto-shutdown triggered after 25 minutes of inactivity");
-    
-    // Show shutdown message
-    lcdShowPopup("Auto shutdown - Goodbye!");
-    
-    // Turn everything off safely
-    setPumpOff();
+
+  // Enter heater standby after timeout
+  if (!systemState.shutdownActive && inactivityTime >= AUTO_SHUTDOWN_TIME) {
+    LOG_INFO("Auto heater standby after inactivity");
+    lcdShowPopup("Heater standby");
     setBoilerOff();
     setSteamBoilerRelayOff();
-    setSteamValveRelayOff();
-    closeValve();
-    
-    // Turn off LED to indicate shutdown
-    led.setColor(0, 0, 0);
-    
-    // Enter infinite loop - machine needs manual power cycle to restart
-    while (true) {
-      watchdogReload();  // Keep watchdog happy
-      delay(1000);       // Wait in low-power state
-      
-      // Check if any button is pressed to wake up
-      if (brewState() || steamState() || waterPinState()) {
-        // Reset system - requires manual power cycle
-        lcdShowPopup("Please power cycle machine");
-      }
+    systemState.shutdownActive = true;
+    systemState.shutdownWarningShown = false;
+  }
+
+  // In standby: keep heater off; any user activity resumes
+  if (systemState.shutdownActive) {
+    setBoilerOff();
+    setSteamBoilerRelayOff();
+    if (brewState() || steamState() || waterPinState() || (lcdCurrentPageId != lcdLastCurrentPageId)) {
+      systemState.shutdownActive = false;
+      lcdShowPopup("");
+      lastActivityTime = millis();
+      LOG_INFO("Heater resumed from standby");
     }
   }
 }
@@ -878,14 +865,12 @@ static inline void sysHealthCheck(float pressureThreshold) {
   
   // Check for auto-shutdown
   checkAutoShutdown();
-
-  /* This *while* is here to prevent situations where the system failed to get a temp reading and temp reads as 0 or -7(cause of the offset)
-  If we would use a non blocking function then the system would keep the SSR in HIGH mode which would most definitely cause boiler overheating */
+  
+  /* This while is here to prevent situations where the system failed to get a temp reading and temp reads as 0 or invalid
+  We force the heater OFF while trying to get a temp reading - IMPORTANT safety feature */
   while (currentState.temperature <= 0.0f || isnan(currentState.temperature) || currentState.temperature >= 170.0f) {
     //Reloading the watchdog timer, if this function fails to run MCU is rebooted
     watchdogReload();
-    /* In the event of the temp failing to read while the SSR is HIGH
-    we force set it to LOW while trying to get a temp reading - IMPORTANT safety feature */
     setPumpOff();
     setBoilerOff();
     setSteamBoilerRelayOff();
@@ -897,7 +882,7 @@ static inline void sysHealthCheck(float pressureThreshold) {
     }
   }
 
-  /*Shut down heaters if steam has been ON and unused fpr more than 10 minutes.*/
+  /* Shut down heaters if steam has been ON and unused for more than 10 minutes. */
   while (currentState.isSteamForgottenON) {
     //Reloading the watchdog timer, if this function fails to run MCU is rebooted
     watchdogReload();
