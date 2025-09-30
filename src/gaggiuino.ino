@@ -776,25 +776,30 @@ static void brewDetect(void) {
     return;
   }
 
-  static bool paramsReset = true;
-  if (currentState.brewSwitchState) {
-    if (!paramsReset) {
-      lcdWakeUp();
-      brewParamsReset();
-      paramsReset = true;
-      brewActive = true;
-    }
-    // needs to be here as it creates a locking state soemtimes if not kept up to date during brew
-    // mainly when shotWeight restriction kick in.
+  // Edge-based brew detection to avoid intermittent first-press failures
+  static bool lastBrewSwitchState = false;
+  bool brewOn = currentState.brewSwitchState;
+
+  // Rising edge: start brew immediately and reset parameters once
+  if (brewOn && !lastBrewSwitchState) {
+    lcdWakeUp();
+    brewParamsReset();
+    brewActive = true;
     systemHealthTimer = millis() + HEALTHCHECK_EVERY;
-  } else {
+  }
+
+  // Falling edge: stop brew and clear counters
+  if (!brewOn && lastBrewSwitchState) {
     brewActive = false;
     currentState.pumpClicks = getAndResetClickCounter();
-    if (paramsReset) {
-      brewParamsReset();
-      paramsReset = false;
-    }
   }
+
+  // While brewing, keep system health refreshed to prevent lockups on restrictions
+  if (brewOn) {
+    systemHealthTimer = millis() + HEALTHCHECK_EVERY;
+  }
+
+  lastBrewSwitchState = brewOn;
 }
 
 static void brewParamsReset(void) {
