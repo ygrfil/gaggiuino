@@ -27,8 +27,8 @@ void justDoCoffee(const eepromValues_t &runningCfg, const SensorState &currentSt
     filteredTempC = tempC;
     filterInit = true;
   } else if (filterInit) {
-    // alpha = 0.18 ~ gentle smoothing
-    filteredTempC = 0.82f * filteredTempC + 0.18f * tempC;
+    // alpha = 0.25 ~ slightly more responsive for tighter control
+    filteredTempC = 0.75f * filteredTempC + 0.25f * tempC;
   } else {
     // Not yet initialized, use raw temperature
     filteredTempC = tempC;
@@ -63,24 +63,39 @@ void justDoCoffee(const eepromValues_t &runningCfg, const SensorState &currentSt
   } else {
     const float diff = setpointC - filteredTempC; // positive when below target
 
-    // Far below: heat aggressively
-    if (diff > 8.0f) {
+    // Hardware-optimized control for Gaggia Classic (small boiler, 1400W element)
+    // Goal: ±0.5°C stability (limited by boiler thermal mass and SSR minimum on-time)
+    if (diff > 4.0f) {
+      // Far below: heat aggressively
       timePropHeat(1000, 100);
-    } else if (diff > 4.0f) {
-      timePropHeat(2000, 65);
     } else if (diff > 2.0f) {
-      timePropHeat(3000, 40);
+      // Getting closer: reduce power
+      timePropHeat(2000, 55);
     } else if (diff > 1.0f) {
-      // Near target: reduce power, preemptively cut if rising fast
-      if (slopeCps > 0.25f) setBoilerOff(); else timePropHeat(4000, 20);
+      // Approaching target: moderate power with long period
+      timePropHeat(3500, 28);
     } else if (diff > 0.5f) {
-      if (slopeCps > 0.20f) setBoilerOff(); else timePropHeat(5000, 12);
-    } else if (diff > 0.2f) {
-      if (slopeCps > 0.15f) setBoilerOff(); else timePropHeat(6000, 6);
+      // Close to target: very gentle with longer period to avoid SSR chatter
+      // Use 6-second window for stable minimum duty cycle
+      if (slopeCps > 0.15f) setBoilerOff(); else timePropHeat(6000, 12);
     } else if (diff > 0.0f) {
-      if (slopeCps > 0.10f) setBoilerOff(); else timePropHeat(7000, 3);
+      // Within ±0.5°C deadband below setpoint: minimal pulses
+      // 8-second window allows SSR to work reliably at minimum duty
+      if (slopeCps > 0.08f) {
+        setBoilerOff();
+      } else {
+        timePropHeat(8000, 8);  // ~640ms on per 8s = minimum practical SSR duty
+      }
+    } else if (diff > -0.5f) {
+      // Within ±0.5°C deadband above setpoint: coast/maintain
+      // Only heat if falling rapidly
+      if (slopeCps < -0.10f) {
+        timePropHeat(10000, 6);  // Very minimal maintenance heat
+      } else {
+        setBoilerOff();
+      }
     } else {
-      // At/above target: off
+      // Above deadband: off
       setBoilerOff();
     }
   }
