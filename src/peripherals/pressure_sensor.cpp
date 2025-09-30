@@ -517,11 +517,11 @@ float getPressure(void) {  //returns sensor pressure data
   errorCount = 0;
   previousPressure = currentPressure;
   
-  // Take multiple readings with reduced delay
+  // Take multiple readings without blocking delays (ADS continuous mode)
   float sumReadings = 0.0f;
   int validReadings = 0;
   
-  for (int i = 0; i < 4; i++) { // Increased from 3 to 4 readings
+  for (int i = 0; i < 4; i++) { // Take 4 readings for averaging
     float reading;
     #if defined SINGLE_BOARD
       // ADS1015 12-bit: Calibration tuned for typical 0-12 bar span
@@ -541,8 +541,7 @@ float getPressure(void) {  //returns sensor pressure data
                (double)reading, isnan(reading) ? "yes" : "no", 
                (double)MIN_PRESSURE_VALUE, (double)MAX_PRESSURE_VALUE);
     }
-    
-    delay(2); // Reduced from 5ms to 2ms
+    // No delay needed - ADS operates in continuous conversion mode
   }
   
   if (validReadings == 0) {

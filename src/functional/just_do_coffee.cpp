@@ -20,14 +20,18 @@ void justDoCoffee(const eepromValues_t &runningCfg, const SensorState &currentSt
   const float tempC = currentState.temperature;
 
   // Low-pass filter to reduce noise and chatter
+  // Initialize with first valid reading (not zero) for faster startup convergence
   static bool filterInit = false;
   static float filteredTempC = 0.0f;
-  if (!filterInit) {
+  if (!filterInit && tempC > 20.0f) { // Wait for valid reading (above room temp)
     filteredTempC = tempC;
     filterInit = true;
-  } else {
+  } else if (filterInit) {
     // alpha = 0.18 ~ gentle smoothing
     filteredTempC = 0.82f * filteredTempC + 0.18f * tempC;
+  } else {
+    // Not yet initialized, use raw temperature
+    filteredTempC = tempC;
   }
 
   // Timing and slope estimation

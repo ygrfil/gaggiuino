@@ -776,30 +776,46 @@ static void brewDetect(void) {
     return;
   }
 
-  // Edge-based brew detection to avoid intermittent first-press failures
+  // Debounced edge-based brew detection for reliable triggering
   static bool lastBrewSwitchState = false;
-  bool brewOn = currentState.brewSwitchState;
+  static unsigned long lastDebounceTime = 0;
+  static bool debouncedState = false;
+  const unsigned long DEBOUNCE_DELAY = 30; // 30ms debounce
 
-  // Rising edge: start brew immediately and reset parameters once
-  if (brewOn && !lastBrewSwitchState) {
-    lcdWakeUp();
-    brewParamsReset();
-    brewActive = true;
-    systemHealthTimer = millis() + HEALTHCHECK_EVERY;
+  bool rawBrewOn = currentState.brewSwitchState;
+
+  // Debounce the switch reading
+  if (rawBrewOn != lastBrewSwitchState) {
+    lastDebounceTime = millis();
   }
 
-  // Falling edge: stop brew and clear counters
-  if (!brewOn && lastBrewSwitchState) {
-    brewActive = false;
-    currentState.pumpClicks = getAndResetClickCounter();
+  if ((millis() - lastDebounceTime) > DEBOUNCE_DELAY) {
+    // Reading has been stable for debounce period
+    bool newDebouncedState = rawBrewOn;
+
+    // Rising edge: start brew immediately and reset parameters once
+    if (newDebouncedState && !debouncedState) {
+      lcdWakeUp();
+      brewParamsReset();
+      brewActive = true;
+      systemHealthTimer = millis() + HEALTHCHECK_EVERY;
+    }
+
+    // Falling edge: stop brew and clear counters
+    if (!newDebouncedState && debouncedState) {
+      brewActive = false;
+      currentState.pumpClicks = getAndResetClickCounter();
+    }
+
+    debouncedState = newDebouncedState;
   }
 
   // While brewing, keep system health refreshed to prevent lockups on restrictions
-  if (brewOn) {
+  if (debouncedState) {
     systemHealthTimer = millis() + HEALTHCHECK_EVERY;
   }
 
-  lastBrewSwitchState = brewOn;
+  lastBrewSwitchState = rawBrewOn;
 }
 
 static void brewParamsReset(void) {
@@ -925,10 +941,14 @@ static inline void sysHealthCheck(float pressureThreshold) {
       setSteamValveRelayOff();
       setSteamBoilerRelayOff();
       
-      // Keep checking pressure while releasing
+      // Keep checking pressure while releasing - wait until fully vented
       unsigned long pressureReleaseStart = millis();
       float releaseStartPressure = currentState.smoothedPressure;
-      while (currentState.smoothedPressure >= pressureThreshold && currentState.temperature < 100.f)
+      unsigned long lastLowPressureTime = 0;
+      const float TARGET_LOW_PRESSURE = 0.15f; // Must drop to 0.15 bar or below
+      const unsigned long STABLE_LOW_TIME = 500; // Stay low for 500ms to confirm full release
+      
+      while (currentState.temperature < 100.f)
       {
         //Reloading the watchdog timer, if this function fails to run MCU is rebooted
         watchdogReload();
@@ -936,9 +956,19 @@ static inline void sysHealthCheck(float pressureThreshold) {
         // Keep reading sensors to update pressure
         sensorsRead();
         
-        // Early-exit when raw or smoothed pressure is clearly below threshold (hysteresis)
-        if (currentState.pressure < pressureThreshold - 0.2f || currentState.smoothedPressure < pressureThreshold - 0.1f) {
-          break;
+        // Check if pressure is at target low level and stable
+        if (currentState.smoothedPressure <= TARGET_LOW_PRESSURE && currentState.pressure <= TARGET_LOW_PRESSURE + 0.1f) {
+          // Start or continue timing how long we've been at low pressure
+          if (lastLowPressureTime == 0) {
+            lastLowPressureTime = millis();
+          } else if (millis() - lastLowPressureTime >= STABLE_LOW_TIME) {
+            // Pressure has been low and stable - release complete
+            LOG_INFO("Pressure fully released (%.2f bar)", (double)currentState.smoothedPressure);
+            break;
+          }
+        } else {
+          // Pressure went back up or not low enough yet - reset stability timer
+          lastLowPressureTime = 0;
         }
 
         // Allow brewing pages to continue functioning during pressure release
@@ -962,9 +992,9 @@ static inline void sysHealthCheck(float pressureThreshold) {
           pressureReleaseStart = millis();
         }
 
-        // Safety timeout - don't get stuck forever
-        if (millis() - pressureReleaseStart > 10000) { // 10 second timeout
-          LOG_WARN("Pressure release timeout - exiting");
+        // Safety timeout - don't get stuck forever (extended to 15s for complete release)
+        if (millis() - pressureReleaseStart > 15000) {
+          LOG_WARN("Pressure release timeout after 15s (current: %.2f bar)", (double)currentState.smoothedPressure);
           break;
         }
       }
