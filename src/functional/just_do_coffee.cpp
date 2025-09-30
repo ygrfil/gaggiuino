@@ -12,107 +12,76 @@ extern unsigned long steamTime;
 
 
 void justDoCoffee(const eepromValues_t &runningCfg, const SensorState &currentState, const bool brewActive) {
-  // Set target mode to brew temp
+  // Brew mode target on LCD
   lcdTargetState((int)HEATING::MODE_brew);
-  
-  // Use consistent units: setpoint in °C from profile; sensor already offset-adjusted in sensorsReadTemperature
+
+  // Control inputs
   const float setpointC = ACTIVE_PROFILE(runningCfg).setpoint;
   const float tempC = currentState.temperature;
 
-  // Multi-level pulsing tuned for boiler thermal lag
-  static uint32_t coolDownLockoutUntil = 0; // when > millis(), heater remains off to let system settle
-  static float lastTempC = 0.0f;
-  static uint32_t lastTempTs = 0;
-  static uint32_t minOffHoldUntil = 0; // enforce brief off-hold near setpoint when rising fast
+  // Low-pass filter to reduce noise and chatter
+  static bool filterInit = false;
+  static float filteredTempC = 0.0f;
+  if (!filterInit) {
+    filteredTempC = tempC;
+    filterInit = true;
+  } else {
+    // alpha = 0.18 ~ gentle smoothing
+    filteredTempC = 0.82f * filteredTempC + 0.18f * tempC;
+  }
 
-  // Time-proportional heater control with explicit duty and period
+  // Timing and slope estimation
+  static uint32_t lastTs = 0;
+  static float lastFiltTemp = 0.0f;
+  uint32_t now = millis();
+  float slopeCps = 0.0f;
+  if (lastTs != 0) {
+    float dt = (now - lastTs) / 1000.0f;
+    if (dt > 0.0f) slopeCps = (filteredTempC - lastFiltTemp) / dt;
+  }
+  lastFiltTemp = filteredTempC;
+  lastTs = now;
+
+  // Simple time-proportional heater control near setpoint
   auto timePropHeat = [](uint32_t periodMs, uint8_t dutyPct) {
     static uint32_t windowStart = 0;
-    uint32_t now = millis();
-    if (now - windowStart >= periodMs) {
-      windowStart = now;
-    }
-    if (dutyPct == 0) {
-      setBoilerOff();
-      return;
-    }
-    if (dutyPct >= 100) {
-      setBoilerOn();
-      return;
-    }
+    uint32_t t = millis();
+    if (t - windowStart >= periodMs) windowStart = t;
+    if (dutyPct == 0) { setBoilerOff(); return; }
+    if (dutyPct >= 100) { setBoilerOn(); return; }
     uint32_t onTime = (periodMs * dutyPct) / 100u;
-    if ((now - windowStart) < onTime) setBoilerOn(); else setBoilerOff();
+    if ((t - windowStart) < onTime) setBoilerOn(); else setBoilerOff();
   };
 
-  // If we're above setpoint, ensure heater is off and optionally hold off briefly
-  if (tempC > setpointC || systemState.shutdownActive) {
-    setBoilerOff();
-    if (tempC >= setpointC + 0.5f) {
-      coolDownLockoutUntil = millis() + 8000; // 8s lockout when > +0.5°C
-    }
-  }
-
-  uint32_t nowTs = millis();
-  // Compute temperature slope in °C/s (defensive against first run)
-  float slopeCps = 0.0f;
-  if (lastTempTs != 0) {
-    float dt = (nowTs - lastTempTs) / 1000.0f;
-    if (dt > 0.0f) slopeCps = (tempC - lastTempC) / dt;
-  }
-  lastTempC = tempC;
-  lastTempTs = nowTs;
-
-  if (nowTs < coolDownLockoutUntil || systemState.shutdownActive) {
+  // Safety: standby always forces heater off
+  if (systemState.shutdownActive) {
     setBoilerOff();
   } else {
-    const float diff = setpointC - tempC; // positive when below target
+    const float diff = setpointC - filteredTempC; // positive when below target
 
-    // Preemptive cut if rising fast near target; also enforce a minimum off hold
-    if (diff <= 1.0f && slopeCps > 0.2f) {
-      minOffHoldUntil = nowTs + 1500; // 1.5s off hold
-    }
-    if (nowTs < minOffHoldUntil) {
-      setBoilerOff();
-      return;
-    }
-
+    // Far below: heat aggressively
     if (diff > 8.0f) {
       timePropHeat(1000, 100);
     } else if (diff > 4.0f) {
-      timePropHeat(2000, 60);
+      timePropHeat(2000, 65);
     } else if (diff > 2.0f) {
-      timePropHeat(3000, 35);
+      timePropHeat(3000, 40);
     } else if (diff > 1.0f) {
-      // If rising fast, reduce or cut
-      if (slopeCps > 0.25f) {
-        setBoilerOff();
-      } else {
-        timePropHeat(4000, 18);
-      }
+      // Near target: reduce power, preemptively cut if rising fast
+      if (slopeCps > 0.25f) setBoilerOff(); else timePropHeat(4000, 20);
     } else if (diff > 0.5f) {
-      if (slopeCps > 0.20f) {
-        setBoilerOff();
-      } else {
-        timePropHeat(5000, 10);
-      }
+      if (slopeCps > 0.20f) setBoilerOff(); else timePropHeat(5000, 12);
     } else if (diff > 0.2f) {
-      if (slopeCps > 0.15f) {
-        setBoilerOff();
-      } else {
-        timePropHeat(6000, 5);
-      }
+      if (slopeCps > 0.15f) setBoilerOff(); else timePropHeat(6000, 6);
     } else if (diff > 0.0f) {
-      if (slopeCps > 0.10f) {
-        setBoilerOff();
-      } else {
-        timePropHeat(7000, 3);
-      }
+      if (slopeCps > 0.10f) setBoilerOff(); else timePropHeat(7000, 3);
     } else {
+      // At/above target: off
       setBoilerOff();
     }
   }
-  
-  // Valve control logic remains unchanged
+
+  // Steam relays kept off in brew mode
   if (brewActive || !currentState.brewSwitchState) {
     setSteamValveRelayOff();
   }
