@@ -252,10 +252,18 @@ bool TemperatureStepTest::getStepTestResults(uint32_t& riseTime, uint32_t& settl
 void TemperatureStepTest::calculateResults() {
     // Calculate overshoot
     float expectedFinalTemp = stepTestTarget;
-    if (stepSize > 0) {
-        overshootResult = ((maxTempReached - expectedFinalTemp) / expectedFinalTemp) * 100.0f;
+    
+    // Safety check: prevent division by zero
+    if (fabsf(expectedFinalTemp) < 0.1f) {
+        LOG_WARN("Step Test: Invalid target temperature (%.2f°C), cannot calculate overshoot", 
+                 static_cast<double>(expectedFinalTemp));
+        overshootResult = 0.0f;
     } else {
-        overshootResult = ((expectedFinalTemp - maxTempReached) / expectedFinalTemp) * 100.0f;
+        if (stepSize > 0) {
+            overshootResult = ((maxTempReached - expectedFinalTemp) / expectedFinalTemp) * 100.0f;
+        } else {
+            overshootResult = ((expectedFinalTemp - maxTempReached) / expectedFinalTemp) * 100.0f;
+        }
     }
     
     // Calculate steady-state error
