@@ -91,32 +91,61 @@ bool GlobalStopConditions::isReached(const SensorState& state, uint32_t timeInSh
 //----------------------------------------------------------------------//
 //--------------------------- CurrentPhase -----------------------------//
 //----------------------------------------------------------------------//
+CurrentPhase::CurrentPhase() : index(0), phase(nullptr), timeInPhase(0), shotSnapshotAtStart(nullptr) {}
 CurrentPhase::CurrentPhase(int index, const Phase& phase, uint32_t timeInPhase, const ShotSnapshot& shotSnapshotAtStart) : index(index), phase{ &phase }, timeInPhase(timeInPhase), shotSnapshotAtStart{ &shotSnapshotAtStart } {}
 CurrentPhase::CurrentPhase(const CurrentPhase& currentPhase) : index(currentPhase.index), phase{ currentPhase.phase }, timeInPhase(currentPhase.timeInPhase), shotSnapshotAtStart{ currentPhase.shotSnapshotAtStart } {}
 
-Phase CurrentPhase::getPhase() { return *phase; }
+Phase CurrentPhase::getPhase() { 
+  static Phase emptyPhase;
+  return phase ? *phase : emptyPhase;
+}
 
-PHASE_TYPE CurrentPhase::getType() { return phase->type; }
+PHASE_TYPE CurrentPhase::getType() { 
+  return phase ? phase->type : PHASE_TYPE::PHASE_TYPE_FLOW;
+}
 
 int CurrentPhase::getIndex() { return index; }
 
 long CurrentPhase::getTimeInPhase() { return timeInPhase; }
 
-float CurrentPhase::getTarget() { return phase->getTarget(timeInPhase, *shotSnapshotAtStart); }
+float CurrentPhase::getTarget() { 
+  if (!phase) return 0.f;
+  
+  // Use stored snapshot if available, otherwise use empty snapshot for initialization
+  static ShotSnapshot emptySnapshot = {0, 0, 0, 0, 0, 0, 0};
+  const ShotSnapshot& snapshot = shotSnapshotAtStart ? *shotSnapshotAtStart : emptySnapshot;
+  
+  return phase->getTarget(timeInPhase, snapshot);
+}
 
-float CurrentPhase::getRestriction() { return phase->getRestriction(); }
+float CurrentPhase::getRestriction() { 
+  return phase ? phase->getRestriction() : 0.f;
+}
 
 void CurrentPhase::update(int index, Phase& phase, uint32_t timeInPhase) {
   CurrentPhase::index = index;
   CurrentPhase::phase = &phase;
   CurrentPhase::timeInPhase = timeInPhase;
+  // Note: shotSnapshotAtStart is NOT updated, will use default empty snapshot in getTarget()
+}
+
+void CurrentPhase::update(int index, Phase& phase, uint32_t timeInPhase, const ShotSnapshot& snapshot) {
+  CurrentPhase::index = index;
+  CurrentPhase::phase = &phase;
+  CurrentPhase::timeInPhase = timeInPhase;
+  CurrentPhase::shotSnapshotAtStart = &snapshot;
 }
 
 //----------------------------------------------------------------------//
 //-------------------------- PhaseProfiler -----------------------------//
 //----------------------------------------------------------------------//
 
-PhaseProfiler::PhaseProfiler(Profile& profile) : profile(profile) {}
+PhaseProfiler::PhaseProfiler(Profile& profile) : profile(profile) {
+  // Initialize currentPhase safely only if profile has phases
+  if (profile.phaseCount() > 0) {
+    currentPhase.update(0, profile.phases[0], 0);
+  }
+}
 
 void PhaseProfiler::updatePhase(uint32_t timeInShot, SensorState& state) {
   size_t phaseIdx = currentPhaseIdx;
@@ -124,16 +153,20 @@ void PhaseProfiler::updatePhase(uint32_t timeInShot, SensorState& state) {
 
   if (phaseIdx >= profile.phaseCount() || profile.globalStopConditions.isReached(state, timeInShot)) {
     currentPhaseIdx = profile.phaseCount();
-    currentPhase.update(currentPhaseIdx - 1, profile.phases[phaseIdx], timeInPhase);
+    // Fix: Use last valid phase index instead of out-of-bounds phaseIdx
+    size_t lastPhaseIdx = profile.phaseCount() > 0 ? profile.phaseCount() - 1 : 0;
+    if (profile.phaseCount() > 0) {
+      currentPhase.update(lastPhaseIdx, profile.phases[lastPhaseIdx], timeInPhase, phaseChangedSnapshot);
+    }
     return;
   }
 
   if (!profile.phases[phaseIdx].isStopConditionReached(state, timeInShot, phaseChangedSnapshot)) {
-    currentPhase.update(phaseIdx, profile.phases[phaseIdx], timeInPhase);
+    currentPhase.update(phaseIdx, profile.phases[phaseIdx], timeInPhase, phaseChangedSnapshot);
     return;
   }
 
-  currentPhase.update(phaseIdx, profile.phases[phaseIdx], timeInPhase);
+  currentPhase.update(phaseIdx, profile.phases[phaseIdx], timeInPhase, phaseChangedSnapshot);
   phaseChangedSnapshot = buildShotSnapshot(timeInShot, state, currentPhase);
   currentPhaseIdx += 1;
   updatePhase(timeInShot, state);
@@ -151,5 +184,8 @@ bool PhaseProfiler::isFinished() {
 void PhaseProfiler::reset() {
   currentPhaseIdx = 0;
   phaseChangedSnapshot = ShotSnapshot{};
-  currentPhase.update(0, profile.phases[0], 0);
+  // Safety check: only update currentPhase if profile has phases
+  if (profile.phaseCount() > 0) {
+    currentPhase.update(0, profile.phases[0], 0);
+  }
 }

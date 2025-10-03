@@ -564,6 +564,10 @@ static void updateProfilerPhases(void) {
   preInfusionFinishedPhaseIdx = profile.phaseCount();
 
   addMainExtractionPhasesAndRamp();
+  
+  // CRITICAL: After updating profile phases, reinitialize the profiler
+  // This ensures currentPhase points to valid phase data
+  phaseProfiler.reset();
 }
 
 void addPreinfusionPhases() {

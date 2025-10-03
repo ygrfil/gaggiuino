@@ -101,6 +101,7 @@ private:
   unsigned long timeInPhase;
 
 public:
+  CurrentPhase();  // Default constructor for safe initialization
   CurrentPhase(int index, const Phase& phase, uint32_t timeInPhase, const ShotSnapshot& shotSnapshotAtStart);
   CurrentPhase(const CurrentPhase& currentPhase);
 
@@ -111,6 +112,7 @@ public:
   float getTarget();
   float getRestriction();
   void update(int index, Phase& phase, uint32_t timeInPhase);
+  void update(int index, Phase& phase, uint32_t timeInPhase, const ShotSnapshot& snapshot);
 };
 
 class PhaseProfiler {
@@ -118,7 +120,7 @@ private:
   Profile& profile;
   size_t currentPhaseIdx = 0; // The index at which the profiler currently is.
   ShotSnapshot phaseChangedSnapshot = ShotSnapshot{0, 0, 0, 0, 0, 0}; // State when the profiler move to this currentPhaseIdx
-  CurrentPhase currentPhase = CurrentPhase(0, profile.phases[0], 0, phaseChangedSnapshot);
+  CurrentPhase currentPhase;  // Safe default initialization, will be set in constructor
 
 public:
   PhaseProfiler(Profile& profile);
