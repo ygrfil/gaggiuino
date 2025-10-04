@@ -923,7 +923,8 @@ static inline void sysHealthCheck(float pressureThreshold) {
   #if defined LEGO_VALVE_RELAY || defined SINGLE_BOARD
 
   // No point going through the whole thing if this first condition isn't met.
-  if (currentState.brewSwitchState || currentState.steamSwitchState || currentState.hotWaterSwitchState) {
+  // CRITICAL: Also check brewActive to prevent pressure release during active brewing
+  if (brewActive || currentState.brewSwitchState || currentState.steamSwitchState || currentState.hotWaterSwitchState) {
     systemHealthTimer = millis() + HEALTHCHECK_EVERY;
     return;
   }
@@ -957,6 +958,14 @@ static inline void sysHealthCheck(float pressureThreshold) {
       {
         //Reloading the watchdog timer, if this function fails to run MCU is rebooted
         watchdogReload();
+        
+        // CRITICAL: Exit pressure release immediately if user starts brewing
+        // This prevents the rare bug where pressing brew during pressure release
+        // causes the system to ignore the brew request
+        if (brewActive || currentState.brewSwitchState) {
+          LOG_INFO("Pressure release aborted - brew started (pressure: %.2f bar)", (double)currentState.smoothedPressure);
+          break;
+        }
         
         // Keep reading sensors to update pressure
         sensorsRead();

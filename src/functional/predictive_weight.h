@@ -29,7 +29,8 @@ public:
     puckResistance(0.f),
     truePuckResistance(0.f),
     resistanceDelta(0.f),
-    pressureDrop(0.f)
+    pressureDrop(0.f),
+    preinfusionFinished(false)
   {}
 
   bool isOutputFlow() {
@@ -42,8 +43,8 @@ public:
   }
 
   void update(const SensorState& state, CurrentPhase& phase, const eepromValues_t& cfg) {
-    // Force predictive output after reasonable volume pumped
-    if (isForceStarted || outputFlowStarted || state.waterPumped >= 50.f) { // Reduced from 65ml to 50ml
+    // Force predictive output after reasonable volume pumped - reduced to start earlier
+    if (isForceStarted || outputFlowStarted || state.waterPumped >= 18.f) { // Reduced to 18ml for earlier start
       outputFlowStarted = true;
       return;
     }
@@ -103,19 +104,18 @@ public:
         return;
       }
     }
-    // Pressure has to cross the threshold - reduced for lighter roasts
-    if (state.smoothedPressure < 1.8f) return;
+    // Pressure has to cross the threshold - reduced for lighter roasts and better compatibility
+    if (state.smoothedPressure < 1.2f) return; // Reduced from 1.8 to 1.2 bar for earlier detection
 
     if (phaseTypePressure) {
       // If the pressure or flow are raising too fast dismiss the spike from the output.
       if (fabsf(state.pressureChangeSpeed) > 5.f || fabsf(state.pumpFlowChangeSpeed) > 2.f) return;
-      // If flow is too big for given pressure or the delta is changing too quickly we're not there yet
-      if (resistanceDelta > 500.f || puckResistance < 1100.f) return;
+      // Relaxed resistance checks for better compatibility with different setups
+      if (resistanceDelta > 800.f || puckResistance < 800.f) return; // Relaxed thresholds
     }
 
-    // If flow is too big for given pressure or the delta is changing too quickly we're not there yet
-    // if (puckResistance < 1100.f) return;
-    if (truePuckResistance < -0.015f) return;
+    // Relaxed puck resistance check for better detection across different machines
+    if (truePuckResistance < -0.025f) return; // Relaxed from -0.015 to -0.025
 
     // We're there!
     outputFlowStarted = true;
@@ -131,7 +131,9 @@ public:
     isForceStarted = false;
     outputFlowStarted = false;
     predictiveTargetReached = false;
-
+    preinfusionFinished = false;
+    truePuckResistance = 0.f;
+    pressureDrop = 0.f;
   }
 };
 
