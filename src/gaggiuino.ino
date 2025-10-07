@@ -237,6 +237,11 @@ static void calculateWeightAndFlow(void) {
       float elapsedTimeSec = elapsedTime / 1000.f;
       long pumpClicks = sensorsReadFlow(elapsedTimeSec);
       float consideredFlow = currentState.smoothedPumpFlow * elapsedTimeSec;
+      
+      // CRITICAL FIX: Always track water pumped during brewing, regardless of predictive weight state
+      // This prevents the catch-22 where waterPumped can't reach 18ml threshold because flow isn't calculated
+      currentState.waterPumped += consideredFlow;
+      
       // Update predictive class with our current phase
       CurrentPhase& phase = phaseProfiler.getCurrentPhase();
       predictiveWeight.update(currentState, phase, runningCfg);
@@ -256,7 +261,6 @@ static void calculateWeightAndFlow(void) {
         currentState.consideredFlow = smoothConsideredFlow.updateEstimate(actualFlow);
         currentState.shotWeight = currentState.scalesPresent ? currentState.shotWeight : currentState.shotWeight + actualFlow;
       }
-      currentState.waterPumped += consideredFlow;
     }
   } else {
     currentState.consideredFlow = 0.f;
