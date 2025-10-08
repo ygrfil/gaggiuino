@@ -722,7 +722,11 @@ void insertRampPhaseIfNeeded(size_t rampPhaseIndex) {
 }
 
 void addFillBasketPhase(float flowRate) {
-  addFlowPhase(Transition(flowRate), -1, -1, 0.1f, -1, -1, -1);
+  // CRITICAL FIX: Increased pressure threshold to prevent instant phase completion
+  // If residual pressure exists, 0.1 bar would trigger immediately causing brew to abort
+  // 2.0 bar is a more realistic threshold for basket fill completion
+  // Added 15-second timeout as safety - basket should fill within this time
+  addFlowPhase(Transition(flowRate), -1, 15000, 2.0f, -1, -1, -1);
 }
 
 void addPressurePhase(Transition pressure, float flowRestriction, int timeMs, float pressureAbove, float pressureBelow, float shotWeight, float isWaterPumped) {
@@ -979,6 +983,7 @@ static inline void sysHealthCheck(float pressureThreshold) {
       unsigned long lastLowPressureTime = 0;
       const float TARGET_LOW_PRESSURE = 0.15f; // Must drop to 0.15 bar or below
       const unsigned long STABLE_LOW_TIME = 500; // Stay low for 500ms to confirm full release
+      const unsigned long MAX_RELEASE_TIME = 20000; // Maximum 20 seconds for pressure release
       
       while (currentState.temperature < 100.f)
       {
@@ -990,6 +995,13 @@ static inline void sysHealthCheck(float pressureThreshold) {
         // causes the system to ignore the brew request
         if (brewActive || currentState.brewSwitchState) {
           LOG_INFO("Pressure release aborted - brew started (pressure: %.2f bar)", (double)currentState.smoothedPressure);
+          break;
+        }
+        
+        // CRITICAL FIX: Safety timeout to prevent infinite pressure release loops
+        // If pressure can't drop below target after 20 seconds, exit anyway
+        if (millis() - pressureReleaseStart >= MAX_RELEASE_TIME) {
+          LOG_WARN("Pressure release timeout - continuing anyway (pressure: %.2f bar)", (double)currentState.smoothedPressure);
           break;
         }
         
