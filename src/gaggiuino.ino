@@ -301,7 +301,12 @@ static void pageValuesRefresh() {
   // MODE_SELECT should always be LAST
   selectedOperationalMode = (OPERATION_MODES) lcdGetSelectedOperationalMode();
 
-  updateProfilerPhases();
+  // CRITICAL FIX: Never rebuild profile phases while brew is active!
+  // This prevents race condition where profile gets cleared mid-brew causing immediate termination
+  // If brew is active, profile phases are already set and should not be modified
+  if (!brewActive) {
+    updateProfilerPhases();
+  }
 
   lcdLastCurrentPageId = lcdCurrentPageId;
 }
@@ -452,7 +457,10 @@ void tryEepromWrite(const eepromValues_t &eepromValues) {
 void lcdSwitchActiveToStoredProfile(const eepromValues_t & storedSettings) {
   runningCfg.activeProfile = lcdGetSelectedProfile();
   ACTIVE_PROFILE(runningCfg) = storedSettings.profiles[runningCfg.activeProfile];
-  updateProfilerPhases();
+  // CRITICAL FIX: Never rebuild profile phases during active brewing
+  if (!brewActive) {
+    updateProfilerPhases();
+  }
   lcdUploadProfile(runningCfg);
 }
 
@@ -530,6 +538,10 @@ void lcdRefreshElementsTrigger(void) {
 }
 
 void lcdQuickProfileSwitch(void) {
+  // CRITICAL FIX: Prevent profile switching during active brewing
+  if (brewActive) {
+    return; // Silently ignore profile switch requests during brew
+  }
   lcdSwitchActiveToStoredProfile(eepromGetCurrentValues());
   lcdShowPopup("Profile switched!");
 }
@@ -540,7 +552,9 @@ void lcdQuickProfileSwitch(void) {
 static void updateProfilerPhases(void) {
   float shotTarget = -1.f;
 
-  if (ACTIVE_PROFILE(runningCfg).stopOnWeightState) {
+  // CRITICAL FIX: Only enable weight-based stop when scales are actually present
+  // Without scales, weight calculations are unreliable and can cause premature brew termination
+  if (ACTIVE_PROFILE(runningCfg).stopOnWeightState && currentState.scalesPresent) {
     shotTarget = (ACTIVE_PROFILE(runningCfg).shotStopOnCustomWeight < 1.f)
       ? ACTIVE_PROFILE(runningCfg).shotDose * ACTIVE_PROFILE(runningCfg).shotPreset
       : ACTIVE_PROFILE(runningCfg).shotStopOnCustomWeight;
@@ -805,8 +819,16 @@ static void brewDetect(void) {
     if (newDebouncedState && !debouncedState) {
       lcdWakeUp();
       brewParamsReset();
-      brewActive = true;
-      systemHealthTimer = millis() + HEALTHCHECK_EVERY;
+      // CRITICAL FIX: Always ensure profile is valid before starting brew
+      // Rebuild if empty to prevent immediate termination
+      if (profile.phaseCount() == 0) {
+        updateProfilerPhases();
+      }
+      // Only start brewing if we have valid phases
+      if (profile.phaseCount() > 0) {
+        brewActive = true;
+        systemHealthTimer = millis() + HEALTHCHECK_EVERY;
+      }
     }
 
     // Falling edge: stop brew and clear counters
