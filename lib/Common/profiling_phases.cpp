@@ -85,7 +85,17 @@ bool PhaseStopConditions::isReached(SensorState& state, long timeInShot, ShotSna
 }
 
 bool GlobalStopConditions::isReached(const SensorState& state, uint32_t timeInShot) {
+  // CRITICAL FIX: Prevent false triggers from invalid timeInShot values
+  // If timeInShot is suspiciously large (> 2 hours), it's likely a calculation error
+  // This can happen if brewingTimer wasn't reset properly or due to millis() overflow issues
+  const uint32_t MAX_REASONABLE_SHOT_TIME = 7200000; // 2 hours in milliseconds
+  
   if (timeInShot < 1000) { // No shot lasts less than 1 second
+    return false;
+  }
+  
+  if (timeInShot > MAX_REASONABLE_SHOT_TIME) {
+    // Invalid timeInShot - likely a bug, don't trigger stop condition
     return false;
   }
 
@@ -157,8 +167,21 @@ PhaseProfiler::PhaseProfiler(Profile& profile) : profile(profile) {
 }
 
 void PhaseProfiler::updatePhase(uint32_t timeInShot, SensorState& state) {
+  // CRITICAL FIX: Safety check for invalid profile state
+  // If profile is empty, mark as finished immediately to prevent undefined behavior
+  if (profile.phaseCount() == 0) {
+    currentPhaseIdx = 0;
+    return;
+  }
+  
   size_t phaseIdx = currentPhaseIdx;
-  uint32_t timeInPhase = timeInShot - phaseChangedSnapshot.timeInShot;
+  
+  // CRITICAL FIX: Prevent underflow in timeInPhase calculation
+  // If phaseChangedSnapshot.timeInShot is larger than timeInShot (shouldn't happen but could due to timing issues),
+  // clamp timeInPhase to 0 instead of allowing unsigned wrap-around
+  uint32_t timeInPhase = (timeInShot >= phaseChangedSnapshot.timeInShot) 
+    ? (timeInShot - phaseChangedSnapshot.timeInShot) 
+    : 0;
 
   if (phaseIdx >= profile.phaseCount() || profile.globalStopConditions.isReached(state, timeInShot)) {
     currentPhaseIdx = profile.phaseCount();

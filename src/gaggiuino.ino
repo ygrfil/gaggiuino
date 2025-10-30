@@ -4,6 +4,7 @@
   #include "dbg.h"
 #endif
 #include "gaggiuino.h"
+#include "peripherals/temperature_safety.h"
 
 // Enhanced Kalman filters for smoother pressure profiling and better user experience
 SimpleKalmanFilter smoothPressure(0.3f, 0.3f, 0.06f);      // Optimized: faster response with good noise rejection
@@ -751,7 +752,23 @@ void onProfileReceived(Profile& newProfile) {
 
 static void profiling(void) {
   if (brewActive) { //runs this only when brew button activated and pressure profile selected
-    uint32_t timeInShot = millis() - brewingTimer;
+    // CRITICAL FIX: Safety check for brewingTimer to prevent invalid timeInShot
+    // If brewingTimer is 0 or invalid (shouldn't happen but could due to timing issues),
+    // recalculate timeInShot safely
+    uint32_t timeInShot = (brewingTimer > 0 && millis() >= brewingTimer) 
+      ? (millis() - brewingTimer) 
+      : 0;
+    
+    // CRITICAL FIX: Additional safety - if timeInShot is suspiciously large,
+    // it means brewingTimer wasn't set correctly, so reset brew state
+    if (timeInShot > 7200000) { // More than 2 hours is unreasonable
+      LOG_ERROR("Brew timer error detected: timeInShot=%lu ms, resetting brew", timeInShot);
+      brewActive = false;
+      setPumpOff();
+      closeValve();
+      return;
+    }
+    
     phaseProfiler.updatePhase(timeInShot, currentState);
     CurrentPhase& currentPhase = phaseProfiler.getCurrentPhase();
     ShotSnapshot shotSnapshot = buildShotSnapshot(timeInShot, currentState, currentPhase);
@@ -865,6 +882,11 @@ static void brewParamsReset(void) {
   weightMeasurements.clear();
   predictiveWeight.reset();
   phaseProfiler.reset();
+  
+  // CRITICAL FIX: Reset temperature safety state when starting a new brew
+  // This prevents stale safety violation flags from interfering with brew start
+  // After machine has been on for extended periods, safety state might be stale
+  temperatureSafety.resetTemperatureStats();
 }
 
 static bool sysReadinessCheck(void) {
