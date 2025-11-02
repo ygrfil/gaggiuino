@@ -1,0 +1,9 @@
+---
+alwaysApply: true
+---
+use platformio best practices
+Use modern coding style and syntax.
+
+Use the latest stable versions of programming languages, libraries, packages, and tools.
+
+Check for the most recent stable version of each dependency only once per project or when adding a new dependency, not every time it is used.

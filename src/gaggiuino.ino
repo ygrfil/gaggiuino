@@ -187,13 +187,18 @@ static void sensorsReadWeight(void) {
 
       if (brewActive) {
         // Safety: prevent negative weight spikes from affecting shot weight
-        if (!currentState.tarePending && currentState.weight > -0.2f) {
-          currentState.shotWeight = fmax(0.f, currentState.weight);
-        } else if (currentState.tarePending) {
-          currentState.shotWeight = 0.f;
+        // Only update shotWeight from scales when scales are actually present
+        if (currentState.scalesPresent) {
+          if (!currentState.tarePending && currentState.weight > -0.2f) {
+            currentState.shotWeight = fmax(0.f, currentState.weight);
+          } else if (currentState.tarePending) {
+            currentState.shotWeight = 0.f;
+          }
+          currentState.weightFlow = fmax(0.f, weightMeasurements.measurementChange().changeSpeed());
+          currentState.smoothedWeightFlow = smoothScalesFlow.updateEstimate(currentState.weightFlow);
         }
-        currentState.weightFlow = fmax(0.f, weightMeasurements.measurementChange().changeSpeed());
-        currentState.smoothedWeightFlow = smoothScalesFlow.updateEstimate(currentState.weightFlow);
+        // When scales are not present, shotWeight is updated from flow calculations in calculateWeightAndFlow()
+        // Do not modify shotWeight here to avoid conflicts
       }
     }
     scalesTimer = millis();
@@ -239,29 +244,31 @@ static void calculateWeightAndFlow(void) {
       long pumpClicks = sensorsReadFlow(elapsedTimeSec);
       float consideredFlow = currentState.smoothedPumpFlow * elapsedTimeSec;
       
-      // CRITICAL FIX: Always track water pumped during brewing, regardless of predictive weight state
-      // This prevents the catch-22 where waterPumped can't reach 18ml threshold because flow isn't calculated
+      // Always track water pumped during brewing
       currentState.waterPumped += consideredFlow;
       
-      // Update predictive class with our current phase
-      CurrentPhase& phase = phaseProfiler.getCurrentPhase();
-      predictiveWeight.update(currentState, phase, runningCfg);
-
-      // Start the predictive weight calculations when conditions are true
-      if (predictiveWeight.isOutputFlow() || currentState.weight > 0.4f) {
-        float flowPerClick = getPumpFlowPerClick(currentState.smoothedPressure);
-        float actualFlow = (consideredFlow > pumpClicks * flowPerClick) ? consideredFlow : pumpClicks * flowPerClick;
-        /* Probabilistically the flow is lower if the shot is just started winding up and we're flow profiling,
-        once pressure stabilises around the setpoint the flow is either stable or puck restriction is high af. */
-        if ((ACTIVE_PROFILE(runningCfg).mfProfileState || ACTIVE_PROFILE(runningCfg).tpType) && currentState.pressureChangeSpeed > 0.15f) {
-          if ((currentState.smoothedPressure < ACTIVE_PROFILE(runningCfg).mfProfileStart * 0.9f)
-          || (currentState.smoothedPressure < ACTIVE_PROFILE(runningCfg).tfProfileStart * 0.9f)) {
-            actualFlow *= 0.3f;
-          }
+      // Calculate flow for display and weight prediction
+      float flowPerClick = getPumpFlowPerClick(currentState.smoothedPressure);
+      float actualFlow = (consideredFlow > pumpClicks * flowPerClick) ? consideredFlow : pumpClicks * flowPerClick;
+      
+      // Apply flow reduction for ramp-up phase if needed
+      if ((ACTIVE_PROFILE(runningCfg).mfProfileState || ACTIVE_PROFILE(runningCfg).tpType) && currentState.pressureChangeSpeed > 0.15f) {
+        if ((currentState.smoothedPressure < ACTIVE_PROFILE(runningCfg).mfProfileStart * 0.9f)
+        || (currentState.smoothedPressure < ACTIVE_PROFILE(runningCfg).tfProfileStart * 0.9f)) {
+          actualFlow *= 0.3f;
         }
-        currentState.consideredFlow = smoothConsideredFlow.updateEstimate(actualFlow);
-        currentState.shotWeight = currentState.scalesPresent ? currentState.shotWeight : currentState.shotWeight + actualFlow;
       }
+      
+      currentState.consideredFlow = smoothConsideredFlow.updateEstimate(actualFlow);
+      
+      // SIMPLIFIED WEIGHT PREDICTION: For non-scale setups, accumulate weight from flow immediately
+      // No complex algorithm delays - just accumulate flow directly when brew is active
+      // This ensures weight prediction works reliably without interfering with brewing
+      // Removed all predictive algorithm dependencies - simple accumulation only
+      if (!currentState.scalesPresent && actualFlow > 0.f) {
+        currentState.shotWeight = currentState.shotWeight + actualFlow;
+      }
+      // When scales are present, shotWeight is updated from actual weight readings in sensorsReadWeight()
     }
   } else {
     currentState.consideredFlow = 0.f;
@@ -417,8 +424,13 @@ static void lcdRefresh(void) {
         // temp decimal handling
         tempDecimal = (currentState.waterTemperature - (uint16_t)currentState.waterTemperature) * 10;
         lcdSetTemperatureDecimal(tempDecimal);
-        // If the weight output is a negative value lower than -0.8 you might want to tare again before extraction starts.
-        if (currentState.shotWeight) lcdSetWeight(currentState.shotWeight > -0.8f ? currentState.shotWeight : -0.9f);
+        // SIMPLIFIED: Always show shotWeight when brewing, no complex conditions
+        // Display weight (handle negative values for tare indication)
+        if (currentState.shotWeight > -0.8f) {
+          lcdSetWeight(currentState.shotWeight);
+        } else {
+          lcdSetWeight(-0.9f); // Show tare needed
+        }
         /*LCD flow output*/
         lcdSetFlow( currentState.smoothedPumpFlow * 10.f);
         break;
@@ -508,8 +520,8 @@ void lcdBrewGraphScalesTareTrigger(void) {
     currentState.tarePending = true;
   }
   else {
+    // SIMPLIFIED: Just reset weight, no complex predictive algorithm manipulation
     currentState.shotWeight = 0.f;
-    predictiveWeight.setIsForceStarted(true);
   }
 }
 
@@ -849,6 +861,8 @@ static void brewDetect(void) {
       if (profile.phaseCount() > 0) {
         brewActive = true;
         systemHealthTimer = millis() + HEALTHCHECK_EVERY;
+        // Immediately update display to show brewing mode - no delays
+        lcdBrewTimerStart();
       }
     }
 

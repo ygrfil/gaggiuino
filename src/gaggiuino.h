@@ -47,6 +47,10 @@ extern SystemState systemState;
 #define AUTO_SHUTDOWN_TIME      1500000UL // Auto shutdown after 25 minutes (25 * 60 * 1000ms)
 #define AUTO_SHUTDOWN_WARNING   1440000UL // Warning 1 minute before shutdown (24 * 60 * 1000ms)
 
+// Weight prediction thresholds
+#define WEIGHT_SCALES_THRESHOLD       0.4f  // Weight threshold (g) to start accumulation with scales
+#define WEIGHT_PREDICTIVE_FALLBACK_ML 15.f  // Fallback water pumped threshold (ml) for predictive weight when algorithm hasn't triggered
+
 enum class OPERATION_MODES {
   OPMODE_straight9Bar,
   OPMODE_justPreinfusion,
