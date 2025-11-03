@@ -3,4 +3,4 @@ alwaysApply: true
 ---
 we use singleboard pcb
 we dont use LEGO
-after change create a firmware name im with fix name and date and copy to main folder
+after change create a firmware name im with fix name and date(always get actual date) and copy to main folder
