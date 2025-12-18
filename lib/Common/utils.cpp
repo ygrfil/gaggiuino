@@ -37,19 +37,11 @@ float easeInOut(float pct) {
 }
 
 float percentageWithTransition(float pct, TransitionCurve transition) {
-  if (transition == TransitionCurve::LINEAR) {
-    return pct;
-  }
-  else if (transition == TransitionCurve::EASE_IN) {
-    return easeIn(pct);
-  }
-  else if (transition == TransitionCurve::EASE_OUT) {
-    return easeOut(pct);
-  }
-  else if (transition == TransitionCurve::INSTANT) {
-    return 1.f;
-  }
-  else {
-    return easeInOut(pct);
+  switch (transition) {
+    case TransitionCurve::LINEAR:     return pct;
+    case TransitionCurve::EASE_IN:    return easeIn(pct);
+    case TransitionCurve::EASE_OUT:   return easeOut(pct);
+    case TransitionCurve::INSTANT:    return 1.f;
+    default:                          return easeInOut(pct);
   }
 }

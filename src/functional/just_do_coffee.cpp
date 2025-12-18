@@ -132,32 +132,25 @@ void pulseHeaters(const uint32_t pulseLength, const int factor_1, const int fact
 //################################____STEAM_POWER_CONTROL____##################################
 //#############################################################################################
 void steamCtrl(const eepromValues_t &runningCfg, SensorState &currentState) {
-  currentState.steamSwitchState ? lcdTargetState((int)HEATING::MODE_steam) : lcdTargetState((int)HEATING::MODE_brew); // setting the steam/hot water target temp
+  lcdTargetState((int)(currentState.steamSwitchState ? HEATING::MODE_steam : HEATING::MODE_brew));
   // steam temp control, needs to be aggressive to keep steam pressure acceptable
   float steamTempSetPoint = runningCfg.steamSetPoint + runningCfg.offsetTemp;
   float sensorTemperature = currentState.temperature + runningCfg.offsetTemp;
 
-  // Original steam logic implementation
-  // This logic has been restored to match the original project implementation
+  // Steam logic - shut down if pressure or temp exceeds limits
   if (currentState.smoothedPressure > steamThreshold_ || sensorTemperature > steamTempSetPoint) {
     setBoilerOff();
     setSteamBoilerRelayOff();
     setSteamValveRelayOff();
     setPumpOff();
   } else {
-    if (sensorTemperature < steamTempSetPoint) {
-      setBoilerOn();
-    } else {
-      setBoilerOff();
-    }
+    // Control boiler based on temperature
+    (sensorTemperature < steamTempSetPoint) ? setBoilerOn() : setBoilerOff();
     setSteamValveRelayOn();
     setSteamBoilerRelayOn();
-    #ifndef DREAM_STEAM_DISABLED // disabled for bigger boilers which have no  need of adding water during steaming
-      if (currentState.smoothedPressure < activeSteamPressure_) {
-        setPumpToRawValue(3);
-      } else {
-        setPumpOff();
-      }
+    #ifndef DREAM_STEAM_DISABLED
+      // DreamSteam: add water when pressure is low
+      (currentState.smoothedPressure < activeSteamPressure_) ? setPumpToRawValue(3) : setPumpOff();
     #endif
   }
 

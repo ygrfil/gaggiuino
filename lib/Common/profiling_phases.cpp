@@ -50,23 +50,15 @@ bool Phase::isStopConditionReached(SensorState& currentState, uint32_t timeInSho
   * The method below predicts if we should already consider the condition achieved when we have a slow reaction time
   */
 inline bool predictTargerAchieved(const float targetValue, const float currentValue, const float changeSpeed, const float reactionTime = 0.f) {
-  // If no change happening, check if we're already at target
-  if (changeSpeed == 0.f) {
-    return currentValue >= targetValue;
-  }
-
-  float remainingDose = targetValue - currentValue;
+  // Already at or past target
+  if (currentValue >= targetValue) return true;
   
-  // CRITICAL FIX: If flow is negative (weight decreasing), we're moving AWAY from target, not towards it
-  // This prevents false "target achieved" when scales have negative readings or noise
-  if (changeSpeed < 0.f) {
-    return false; // Can't reach target with negative flow
-  }
+  // Can't reach target with zero or negative flow
+  if (changeSpeed <= 0.f) return false;
   
-  // Only predict target achieved if we're moving in the right direction (positive flow towards target)
-  float secondsRemaining = remainingDose / changeSpeed;
-
-  return secondsRemaining < reactionTime ? true : false;
+  // Predict if target will be reached within reaction time
+  float secondsRemaining = (targetValue - currentValue) / changeSpeed;
+  return secondsRemaining < reactionTime;
 }
 
 bool PhaseStopConditions::isReached(SensorState& state, long timeInShot, ShotSnapshot stateAtPhaseStart) const {

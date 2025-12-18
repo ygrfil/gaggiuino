@@ -1199,14 +1199,9 @@ static void updateStartupTimer(void) {
 
 static void cpsInit(eepromValues_t &eepromValues) {
   int cps = getCPS();
-  if (cps > 110) { // double 60 Hz
-    eepromValues.powerLineFrequency = 60u;
-  } else if (cps > 80) { // double 50 Hz
-    eepromValues.powerLineFrequency = 50u;
-  } else if (cps > 55) { // 60 Hz
-    eepromValues.powerLineFrequency = 60u;
-  } else if (cps > 0) { // 50 Hz
-    eepromValues.powerLineFrequency = 50u;
+  // CPS > 55 indicates 60Hz (single or double), otherwise 50Hz
+  if (cps > 0) {
+    eepromValues.powerLineFrequency = (cps > 55) ? 60u : 50u;
   }
 }
 

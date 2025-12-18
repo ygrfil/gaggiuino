@@ -19,79 +19,73 @@ namespace {
   eepromValues_t getEepromDefaults(void) {
     eepromValues_t defaultData;
 
-    // Profiles
+    // Profiles - copy fields from default profile template
     defaultData.activeProfile = 0;
-    for (int i=0; i<MAX_PROFILES; i++) {
-      snprintf(defaultData.profiles[i].name, PROFILE_NAME_LENGTH, "%s", defaultsProfile[i].name);
-      // temp
-
-      // PI
-      defaultData.profiles[i].preinfusionState = defaultsProfile[i].preinfusionState;
-      defaultData.profiles[i].preinfusionSec = defaultsProfile[i].preinfusionSec;
-      defaultData.profiles[i].preinfusionBar = defaultsProfile[i].preinfusionBar;
-      defaultData.profiles[i].preinfusionRamp = defaultsProfile[i].preinfusionRamp;
-      defaultData.profiles[i].preinfusionFlowState = defaultsProfile[i].preinfusionFlowState;
-      defaultData.profiles[i].preinfusionFlowVol = defaultsProfile[i].preinfusionFlowVol;
-      defaultData.profiles[i].preinfusionFlowTime = defaultsProfile[i].preinfusionFlowTime;
-      defaultData.profiles[i].preinfusionFlowPressureTarget = defaultsProfile[i].preinfusionFlowPressureTarget;
-      defaultData.profiles[i].preinfusionPressureFlowTarget = defaultsProfile[i].preinfusionPressureFlowTarget;
-      defaultData.profiles[i].preinfusionFilled = defaultsProfile[i].preinfusionFilled;
-      defaultData.profiles[i].preinfusionPressureAbove = defaultsProfile[i].preinfusionPressureAbove;
-      defaultData.profiles[i].preinfusionWeightAbove = defaultsProfile[i].preinfusionWeightAbove;
-      // SOAK
-      defaultData.profiles[i].soakState = defaultsProfile[i].soakState;
-      defaultData.profiles[i].soakTimePressure = defaultsProfile[i].soakTimePressure;
-      defaultData.profiles[i].soakTimeFlow = defaultsProfile[i].soakTimeFlow;
-      defaultData.profiles[i].soakKeepPressure = defaultsProfile[i].soakKeepPressure;
-      defaultData.profiles[i].soakKeepFlow = defaultsProfile[i].soakKeepFlow;
-      defaultData.profiles[i].soakBelowPressure = defaultsProfile[i].soakBelowPressure;
-      defaultData.profiles[i].soakAbovePressure = defaultsProfile[i].soakAbovePressure;
-      defaultData.profiles[i].soakAboveWeight = defaultsProfile[i].soakAboveWeight;
-      // PI -> TP/PF
-      defaultData.profiles[i].preinfusionRamp = defaultsProfile[i].preinfusionRamp;
-      defaultData.profiles[i].preinfusionRampSlope = defaultsProfile[i].preinfusionRampSlope;
-      // Transition Profile - ramp&hold || advanced profiling
-      defaultData.profiles[i].tpState = defaultsProfile[i].tpState;
-      defaultData.profiles[i].tpType = defaultsProfile[i].tpType; // transtion profile type :pressure|flow:
-      defaultData.profiles[i].tpProfilingStart = defaultsProfile[i].tpProfilingStart;
-      defaultData.profiles[i].tpProfilingFinish = defaultsProfile[i].tpProfilingFinish;
-      defaultData.profiles[i].tpProfilingHold = defaultsProfile[i].tpProfilingHold;
-      defaultData.profiles[i].tpProfilingHoldLimit = defaultsProfile[i].tpProfilingHoldLimit;
-      defaultData.profiles[i].tpProfilingSlope = defaultsProfile[i].tpProfilingSlope;
-      defaultData.profiles[i].tpProfilingSlopeShape = defaultsProfile[i].tpProfilingSlopeShape;
-      defaultData.profiles[i].tpProfilingFlowRestriction = defaultsProfile[i].tpProfilingFlowRestriction;
-      defaultData.profiles[i].tfProfileStart = defaultsProfile[i].tfProfileStart;
-      defaultData.profiles[i].tfProfileEnd = defaultsProfile[i].tfProfileEnd;
-      defaultData.profiles[i].tfProfileHold = defaultsProfile[i].tfProfileHold;
-      defaultData.profiles[i].tfProfileHoldLimit = defaultsProfile[i].tfProfileHoldLimit;
-      defaultData.profiles[i].tfProfileSlope = defaultsProfile[i].tfProfileSlope;
-      defaultData.profiles[i].tfProfileSlopeShape = defaultsProfile[i].tfProfileSlopeShape;
-      defaultData.profiles[i].tfProfilingPressureRestriction = defaultsProfile[i].tfProfilingPressureRestriction;
-      // Profiling
-      defaultData.profiles[i].profilingState = defaultsProfile[i].profilingState;
-      defaultData.profiles[i].mfProfileState = defaultsProfile[i].mfProfileState;
-      defaultData.profiles[i].mpProfilingStart = defaultsProfile[i].mpProfilingStart;
-      defaultData.profiles[i].mpProfilingFinish = defaultsProfile[i].mpProfilingFinish;
-      defaultData.profiles[i].mpProfilingSlope = defaultsProfile[i].mpProfilingSlope;
-      defaultData.profiles[i].mpProfilingSlopeShape = defaultsProfile[i].mpProfilingSlopeShape;
-      defaultData.profiles[i].mpProfilingFlowRestriction = defaultsProfile[i].mpProfilingFlowRestriction;
-      defaultData.profiles[i].mfProfileStart = defaultsProfile[i].mfProfileStart;
-      defaultData.profiles[i].mfProfileEnd = defaultsProfile[i].mfProfileEnd;
-      defaultData.profiles[i].mfProfileSlope = defaultsProfile[i].mfProfileSlope;
-      defaultData.profiles[i].mfProfileSlopeShape = defaultsProfile[i].mfProfileSlopeShape;
-      defaultData.profiles[i].mfProfilingPressureRestriction = defaultsProfile[i].mfProfilingPressureRestriction;
-      /*-----------------------OTHER-----------------*/
-      defaultData.profiles[i].setpoint = defaultsProfile[i].setpoint;
-      // Dose settings
-      defaultData.profiles[i].stopOnWeightState = defaultsProfile[i].stopOnWeightState;
-      defaultData.profiles[i].shotDose = defaultsProfile[i].shotDose;
-      defaultData.profiles[i].shotStopOnCustomWeight = defaultsProfile[i].shotStopOnCustomWeight;
-      defaultData.profiles[i].shotPreset = defaultsProfile[i].shotPreset;
+    for (int i = 0; i < MAX_PROFILES; i++) {
+      auto& dst = defaultData.profiles[i];
+      const auto& src = defaultsProfile[i];
+      snprintf(dst.name, PROFILE_NAME_LENGTH, "%s", src.name);
+      dst.preinfusionState = src.preinfusionState;
+      dst.preinfusionFlowState = src.preinfusionFlowState;
+      dst.preinfusionSec = src.preinfusionSec;
+      dst.preinfusionBar = src.preinfusionBar;
+      dst.preinfusionFlowVol = src.preinfusionFlowVol;
+      dst.preinfusionFlowTime = src.preinfusionFlowTime;
+      dst.preinfusionFlowPressureTarget = src.preinfusionFlowPressureTarget;
+      dst.preinfusionPressureFlowTarget = src.preinfusionPressureFlowTarget;
+      dst.preinfusionFilled = src.preinfusionFilled;
+      dst.preinfusionPressureAbove = src.preinfusionPressureAbove;
+      dst.preinfusionWeightAbove = src.preinfusionWeightAbove;
+      dst.soakState = src.soakState;
+      dst.soakTimePressure = src.soakTimePressure;
+      dst.soakTimeFlow = src.soakTimeFlow;
+      dst.soakKeepPressure = src.soakKeepPressure;
+      dst.soakKeepFlow = src.soakKeepFlow;
+      dst.soakBelowPressure = src.soakBelowPressure;
+      dst.soakAbovePressure = src.soakAbovePressure;
+      dst.soakAboveWeight = src.soakAboveWeight;
+      dst.preinfusionRamp = src.preinfusionRamp;
+      dst.preinfusionRampSlope = src.preinfusionRampSlope;
+      dst.tpState = src.tpState;
+      dst.tpType = src.tpType;
+      dst.tpProfilingStart = src.tpProfilingStart;
+      dst.tpProfilingFinish = src.tpProfilingFinish;
+      dst.tpProfilingHold = src.tpProfilingHold;
+      dst.tpProfilingHoldLimit = src.tpProfilingHoldLimit;
+      dst.tpProfilingSlope = src.tpProfilingSlope;
+      dst.tpProfilingSlopeShape = src.tpProfilingSlopeShape;
+      dst.tpProfilingFlowRestriction = src.tpProfilingFlowRestriction;
+      dst.tfProfileStart = src.tfProfileStart;
+      dst.tfProfileEnd = src.tfProfileEnd;
+      dst.tfProfileHold = src.tfProfileHold;
+      dst.tfProfileHoldLimit = src.tfProfileHoldLimit;
+      dst.tfProfileSlope = src.tfProfileSlope;
+      dst.tfProfileSlopeShape = src.tfProfileSlopeShape;
+      dst.tfProfilingPressureRestriction = src.tfProfilingPressureRestriction;
+      dst.profilingState = src.profilingState;
+      dst.mfProfileState = src.mfProfileState;
+      dst.mpProfilingStart = src.mpProfilingStart;
+      dst.mpProfilingFinish = src.mpProfilingFinish;
+      dst.mpProfilingSlope = src.mpProfilingSlope;
+      dst.mpProfilingSlopeShape = src.mpProfilingSlopeShape;
+      dst.mpProfilingFlowRestriction = src.mpProfilingFlowRestriction;
+      dst.mfProfileStart = src.mfProfileStart;
+      dst.mfProfileEnd = src.mfProfileEnd;
+      dst.mfProfileSlope = src.mfProfileSlope;
+      dst.mfProfileSlopeShape = src.mfProfileSlopeShape;
+      dst.mfProfilingPressureRestriction = src.mfProfilingPressureRestriction;
+      dst.setpoint = src.setpoint;
+      dst.stopOnWeightState = src.stopOnWeightState;
+      dst.shotDose = src.shotDose;
+      dst.shotStopOnCustomWeight = src.shotStopOnCustomWeight;
+      dst.shotPreset = src.shotPreset;
     }
+
     // General brew settings
     defaultData.homeOnShotFinish = false;
     defaultData.brewDeltaState = true;
     defaultData.basketPrefill = false;
+
     // System settings
     defaultData.steamSetPoint = 155;
     defaultData.offsetTemp = 7;
@@ -104,8 +98,8 @@ namespace {
     defaultData.scalesF1 = 3920;
     defaultData.scalesF2 = 4210;
     defaultData.pumpFlowAtZero = 0.2225f;
-    defaultData.ledState  = true;
-    defaultData.ledDisco  = true;
+    defaultData.ledState = true;
+    defaultData.ledDisco = true;
     defaultData.ledR = 9;
     defaultData.ledG = 0;
     defaultData.ledB = 9;

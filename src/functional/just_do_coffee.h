@@ -22,18 +22,10 @@ enum class HEATING {
   MODE_hotWater
 };
 
-// Optimized temperature delta calculation using integer math
-// Declared in the cpp file to avoid multiple definitions
-int16_t TEMP_DELTA_OPTIMIZED(int16_t tempSetpoint, const SensorState &currentState);
-
 void justDoCoffee(const eepromValues_t &runningCfg, const SensorState &currentState, const bool brewActive);
 void pulseHeaters(const uint32_t pulseLength, const int factor_1, const int factor_2, const bool brewActive);
 void steamCtrl(const eepromValues_t &runningCfg, SensorState &currentState);
 void hotWaterMode(const SensorState &currentState);
-
-// PID controller helper functions for mode transition and temperature control
-void handleModeTransition(bool brewActive);
-float computePIDTemperatureControlWithMode(float setpoint, float currentTemp, bool isBrewMode);
 
 #endif
 

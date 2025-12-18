@@ -24,7 +24,7 @@ void deScale(eepromValues_t &runningCfg, const SensorState &currentState) {
       }
       break;
     case DescalingState::DESCALING_PHASE1: // Slowly penetrating that scale
-      currentState.brewSwitchState ? descalingState : descalingState = DescalingState::FINISHED;
+      if (!currentState.brewSwitchState) descalingState = DescalingState::FINISHED;
       setPumpToRawValue(10);
       if (millis() - descalingTimer > DESCALE_PHASE1_EVERY) {
         lcdSetDescaleCycle(descalingCycle++);
@@ -37,7 +37,7 @@ void deScale(eepromValues_t &runningCfg, const SensorState &currentState) {
       }
       break;
     case DescalingState::DESCALING_PHASE2: // Softening the f outta that scale
-      currentState.brewSwitchState ? descalingState : descalingState = DescalingState::FINISHED;
+      if (!currentState.brewSwitchState) descalingState = DescalingState::FINISHED;
       setPumpOff();
       if (millis() - descalingTimer > DESCALE_PHASE2_EVERY) {
         descalingTimer = millis();
@@ -46,7 +46,7 @@ void deScale(eepromValues_t &runningCfg, const SensorState &currentState) {
       }
       break;
     case DescalingState::DESCALING_PHASE3: // Fucking up that scale big time
-      currentState.brewSwitchState ? descalingState : descalingState = DescalingState::FINISHED;
+      if (!currentState.brewSwitchState) descalingState = DescalingState::FINISHED;
       setPumpToRawValue(30);
       if (millis() - descalingTimer > DESCALE_PHASE3_EVERY) {
         solenoidBeat();
@@ -59,11 +59,11 @@ void deScale(eepromValues_t &runningCfg, const SensorState &currentState) {
         }
       }
       break;
-    case DescalingState::FINISHED: // Scale successufuly fucked
+    case DescalingState::FINISHED: // Scale successfully fucked
       setPumpOff();
       closeValve();
       setSteamValveRelayOff();
-      currentState.brewSwitchState ? descalingState = DescalingState::FINISHED : descalingState = DescalingState::IDLE;
+      if (!currentState.brewSwitchState) descalingState = DescalingState::IDLE;
       if (millis() - descalingTimer > 1000) {
         lcdBrewTimerStop();
         lcdShowPopup("FINISHED");
@@ -77,19 +77,18 @@ void deScale(eepromValues_t &runningCfg, const SensorState &currentState) {
 void solenoidBeat() {
   setPumpFullOn();
   closeValve();
-  delay(1000);
-  watchdogReload();
-  openValve();
-  delay(200);
-  closeValve();
-  delay(1000);
-  watchdogReload();
-  openValve();
-  delay(200);
-  closeValve();
-  delay(1000);
-  watchdogReload();
-  openValve();
+  
+  // Perform valve cycling 3 times
+  for (int i = 0; i < 3; i++) {
+    delay(1000);
+    watchdogReload();
+    openValve();
+    if (i < 2) {  // Don't close on last iteration
+      delay(200);
+      closeValve();
+    }
+  }
+  
   setPumpOff();
 }
 
