@@ -198,7 +198,6 @@ void PhaseProfiler::updatePhase(uint32_t timeInShot, SensorState& state) {
     return;
   }
 
-  currentPhase.update(phaseIdx, profile.phases[phaseIdx], timeInPhase, phaseChangedSnapshot);
   phaseChangedSnapshot = buildShotSnapshot(timeInShot, state, currentPhase);
   currentPhaseIdx += 1;
   updatePhase(timeInShot, state);

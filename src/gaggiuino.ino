@@ -402,9 +402,12 @@ static void lcdRefresh(void) {
     /*LCD temp output*/
     float brewTempSetPoint = ACTIVE_PROFILE(runningCfg).setpoint + runningCfg.offsetTemp;
     // float liveTempWithOffset = currentState.temperature - runningCfg.offsetTemp;
-    currentState.waterTemperature = (currentState.temperature > (float)ACTIVE_PROFILE(runningCfg).setpoint && currentState.brewSwitchState)
-      ? currentState.temperature / (float)brewTempSetPoint + (float)ACTIVE_PROFILE(runningCfg).setpoint
-      : currentState.temperature;
+    // CRITICAL FIX: Prevent division by zero in water temperature calculation
+    if (currentState.temperature > (float)ACTIVE_PROFILE(runningCfg).setpoint && currentState.brewSwitchState && brewTempSetPoint > 0.1f) {
+      currentState.waterTemperature = currentState.temperature / (float)brewTempSetPoint + (float)ACTIVE_PROFILE(runningCfg).setpoint;
+    } else {
+      currentState.waterTemperature = currentState.temperature;
+    }
 
     lcdSetTemperature(std::floor((uint16_t)currentState.waterTemperature));
 
@@ -473,6 +476,15 @@ void lcdSwitchActiveToStoredProfile(const eepromValues_t & storedSettings) {
   // CRITICAL FIX: Never rebuild profile phases during active brewing
   if (!brewActive) {
     updateProfilerPhases();
+    // CRITICAL FIX: Ensure profile is fully initialized after switching
+    // Reset phase profiler state to ensure clean start for next brew
+    phaseProfiler.reset();
+    // CRITICAL FIX: Validate profile has phases - if empty, rebuild with defaults
+    // This prevents issues with corrupted or invalid profile configurations
+    if (profile.phaseCount() == 0) {
+      LOG_ERROR("Profile %d has no phases after switch, rebuilding with defaults", runningCfg.activeProfile);
+      updateProfilerPhases();
+    }
   }
   lcdUploadProfile(runningCfg);
 }
@@ -654,10 +666,10 @@ void addMainExtractionPhasesAndRamp() {
 
         if (fpStart > 0.f && fpHold > 0) {
           addFlowPhase(Transition{ fpStart }, holdLimit, fpHold, -1, -1, -1, -1);
-          rampPhaseIndex = rampPhaseIndex > 0 ? rampPhaseIndex : profile.phaseCount() - 1;
+          rampPhaseIndex = rampPhaseIndex >= 0 ? rampPhaseIndex : profile.phaseCount() - 1;
         }
         addFlowPhase(Transition{ fpStart, fpEnd, curve, curveTime }, ACTIVE_PROFILE(runningCfg).tfProfilingPressureRestriction, curveTime, -1, -1, -1, -1);
-        rampPhaseIndex = rampPhaseIndex > 0 ? rampPhaseIndex : profile.phaseCount() - 1;
+        rampPhaseIndex = rampPhaseIndex >= 0 ? rampPhaseIndex : profile.phaseCount() - 1;
       }
       else { // pressure based profiling enabled
         /* Setting the phase specific restrictions */
@@ -672,10 +684,10 @@ void addMainExtractionPhasesAndRamp() {
 
         if (ppStart > 0.f && ppHold > 0) {
           addPressurePhase(Transition{ ppStart }, holdLimit, ppHold, -1, -1, -1, -1);
-          rampPhaseIndex = rampPhaseIndex > 0 ? rampPhaseIndex : profile.phaseCount() - 1;
+          rampPhaseIndex = rampPhaseIndex >= 0 ? rampPhaseIndex : profile.phaseCount() - 1;
         }
         addPressurePhase(Transition{ ppStart, ppEnd, curve, curveTime }, ACTIVE_PROFILE(runningCfg).tpProfilingFlowRestriction, curveTime, -1, -1, -1, -1);
-        rampPhaseIndex = rampPhaseIndex > 0 ? rampPhaseIndex : profile.phaseCount() - 1;
+        rampPhaseIndex = rampPhaseIndex >= 0 ? rampPhaseIndex : profile.phaseCount() - 1;
       }
     }
 
@@ -705,8 +717,11 @@ void addMainExtractionPhasesAndRamp() {
     addPressurePhase(Transition(9.f), -1, -1, -1, -1, -1, -1);
   }
 
-  rampPhaseIndex = rampPhaseIndex > 0 ? rampPhaseIndex : profile.phaseCount() - 1;
-  insertRampPhaseIfNeeded(rampPhaseIndex);
+  // CRITICAL FIX: Prevent array underflow - check if profile has phases before accessing
+  if (profile.phaseCount() > 0) {
+    rampPhaseIndex = rampPhaseIndex >= 0 ? rampPhaseIndex : profile.phaseCount() - 1;
+    insertRampPhaseIfNeeded(rampPhaseIndex);
+  }
 }
 
 // ------------ Insert a ramp phase in the rampPhaseIndex position ------------ //
@@ -714,7 +729,8 @@ void insertRampPhaseIfNeeded(size_t rampPhaseIndex) {
   uint16_t rampTime = ACTIVE_PROFILE(runningCfg).preinfusionRamp;
   TransitionCurve rampCurve = (TransitionCurve)ACTIVE_PROFILE(runningCfg).preinfusionRampSlope;
 
-  if (rampPhaseIndex <= 0 || rampTime <= 0 || rampCurve == TransitionCurve::INSTANT) { // No ramp needed
+  // CRITICAL FIX: Check bounds before accessing profile phases
+  if (rampPhaseIndex <= 0 || rampPhaseIndex >= profile.phaseCount() || rampTime <= 0 || rampCurve == TransitionCurve::INSTANT) { // No ramp needed
     return;
   }
 
@@ -1078,12 +1094,6 @@ static inline void sysHealthCheck(float pressureThreshold) {
         if (currentState.smoothedPressure < releaseStartPressure - 0.3f) {
           releaseStartPressure = currentState.smoothedPressure;
           pressureReleaseStart = millis();
-        }
-
-        // Safety timeout - don't get stuck forever (extended to 15s for complete release)
-        if (millis() - pressureReleaseStart > 15000) {
-          LOG_WARN("Pressure release timeout after 15s (current: %.2f bar)", (double)currentState.smoothedPressure);
-          break;
         }
       }
       

@@ -27,4 +27,8 @@ void enablePIDDiagnosticMode(bool enabled);
 void logPIDDiagnostics(float setpoint, float currentTemp, float output, bool heaterState);
 bool checkTemperatureSafetyLimits(float currentTemp, bool heaterState);
 
+// PWM heater control functions (map to simple on/off when hardware PWM not available)
+void setHeaterDutyCycle(uint8_t dutyCycle);
+void heaterHardwareOff(void);
+
 #endif // HEATER_CONTROL_H

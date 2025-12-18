@@ -132,6 +132,11 @@ float getPumpFlow(const float cps, const float pressure) {
 float getClicksPerSecondForFlow(const float flow, const float pressure) {
   if (flow == 0.f) return 0;
   float flowPerClick = getPumpFlowPerClick(pressure);
+  // CRITICAL FIX: Prevent division by zero - check if flowPerClick is valid
+  if (flowPerClick <= 0.0001f) {
+    // If flow per click is too small or zero, return maximum pump capacity as fallback
+    return (float)maxPumpClicksPerSecond;
+  }
   float cps = flow / flowPerClick;
   return fminf(cps, (float)maxPumpClicksPerSecond);
 }

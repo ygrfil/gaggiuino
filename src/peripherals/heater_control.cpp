@@ -91,3 +91,18 @@ bool checkTemperatureSafetyLimits(float currentTemp, bool heaterState) {
     (void)heaterState;
     return true;
 }
+
+// PWM heater control functions - map to simple on/off control
+void setHeaterDutyCycle(uint8_t dutyCycle) {
+    // Map PWM duty cycle to simple on/off control
+    if (dutyCycle > 50) {
+        setBoilerOn();
+    } else {
+        setBoilerOff();
+    }
+}
+
+void heaterHardwareOff(void) {
+    // Turn heater off
+    setBoilerOff();
+}
