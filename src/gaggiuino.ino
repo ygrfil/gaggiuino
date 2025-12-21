@@ -780,17 +780,13 @@ void onProfileReceived(Profile& newProfile) {
 
 static void profiling(void) {
   if (brewActive) { //runs this only when brew button activated and pressure profile selected
-    // CRITICAL FIX: Safety check for brewingTimer to prevent invalid timeInShot
-    // If brewingTimer is 0 or invalid (shouldn't happen but could due to timing issues),
-    // recalculate timeInShot safely
     uint32_t timeInShot = (brewingTimer > 0 && millis() >= brewingTimer) 
       ? (millis() - brewingTimer) 
       : 0;
     
-    // CRITICAL FIX: Additional safety - if timeInShot is suspiciously large,
-    // it means brewingTimer wasn't set correctly, so reset brew state
-    if (timeInShot > 7200000) { // More than 2 hours is unreasonable
-      LOG_ERROR("Brew timer error detected: timeInShot=%lu ms, resetting brew", timeInShot);
+    // Safety check - if timeInShot is unreasonable, reset brew state
+    if (timeInShot > 7200000) { // More than 2 hours
+      LOG_ERROR("Brew timer error: timeInShot=%lu ms", timeInShot);
       brewActive = false;
       setPumpOff();
       closeValve();
@@ -868,8 +864,7 @@ static void brewDetect(void) {
     if (newDebouncedState && !debouncedState) {
       lcdWakeUp();
       brewParamsReset();
-      // CRITICAL FIX: Always ensure profile is valid before starting brew
-      // Rebuild if empty to prevent immediate termination
+      // Ensure profile is valid before starting brew
       if (profile.phaseCount() == 0) {
         updateProfilerPhases();
       }
@@ -877,7 +872,6 @@ static void brewDetect(void) {
       if (profile.phaseCount() > 0) {
         brewActive = true;
         systemHealthTimer = millis() + HEALTHCHECK_EVERY;
-        // Immediately update display to show brewing mode - no delays
         lcdBrewTimerStart();
       }
     }
@@ -913,9 +907,7 @@ static void brewParamsReset(void) {
   predictiveWeight.reset();
   phaseProfiler.reset();
   
-  // CRITICAL FIX: Reset temperature safety state when starting a new brew
-  // This prevents stale safety violation flags from interfering with brew start
-  // After machine has been on for extended periods, safety state might be stale
+  // Reset temperature safety state when starting a new brew
   temperatureSafety.resetTemperatureStats();
 }
 

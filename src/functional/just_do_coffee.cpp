@@ -8,8 +8,10 @@ extern SystemState systemState;
 
 extern unsigned long steamTime;
 
-// Original control does not rely on persistent PID state
-
+// SIMPLIFIED: Single fixed period for all temperature control
+// This eliminates timing state corruption that caused the intermittent brew bug
+static const uint32_t HEATER_PERIOD_MS = 2000;  // 2 second period - good balance for all conditions
+static uint32_t g_heaterWindowStart = 0;
 
 void justDoCoffee(const eepromValues_t &runningCfg, const SensorState &currentState, const bool brewActive) {
   // Brew mode target on LCD
@@ -20,41 +22,52 @@ void justDoCoffee(const eepromValues_t &runningCfg, const SensorState &currentSt
   const float tempC = currentState.temperature;
 
   // Low-pass filter to reduce noise and chatter
-  // Initialize with first valid reading (not zero) for faster startup convergence
   static bool filterInit = false;
   static float filteredTempC = 0.0f;
-  if (!filterInit && tempC > 20.0f) { // Wait for valid reading (above room temp)
+  static uint32_t lastFilterUpdate = 0;
+  
+  uint32_t now = millis();
+  
+  // Reset filter if stale (>5 seconds gap indicates mode switch)
+  if (filterInit && (now - lastFilterUpdate > 5000)) {
+    filteredTempC = tempC;
+  }
+  lastFilterUpdate = now;
+  
+  if (!filterInit && tempC > 20.0f) {
     filteredTempC = tempC;
     filterInit = true;
   } else if (filterInit) {
-    // alpha = 0.25 ~ slightly more responsive for tighter control
     filteredTempC = 0.75f * filteredTempC + 0.25f * tempC;
   } else {
-    // Not yet initialized, use raw temperature
     filteredTempC = tempC;
   }
 
-  // Timing and slope estimation
+  // Slope estimation for predictive control
   static uint32_t lastTs = 0;
   static float lastFiltTemp = 0.0f;
-  uint32_t now = millis();
   float slopeCps = 0.0f;
-  if (lastTs != 0) {
+  
+  if (lastTs != 0 && (now - lastTs) < 2000) {
     float dt = (now - lastTs) / 1000.0f;
     if (dt > 0.0f) slopeCps = (filteredTempC - lastFiltTemp) / dt;
   }
   lastFiltTemp = filteredTempC;
   lastTs = now;
 
-  // Simple time-proportional heater control near setpoint
-  auto timePropHeat = [](uint32_t periodMs, uint8_t dutyPct) {
-    static uint32_t windowStart = 0;
-    uint32_t t = millis();
-    if (t - windowStart >= periodMs) windowStart = t;
+  // SIMPLIFIED: Single time-proportional heater control with fixed period
+  // No more period switching = no timing corruption bugs
+  auto timePropHeat = [&now](uint8_t dutyPct) {
+    // Handle window wrap-around
+    if (now - g_heaterWindowStart >= HEATER_PERIOD_MS) {
+      g_heaterWindowStart = now;
+    }
+    
     if (dutyPct == 0) { setBoilerOff(); return; }
     if (dutyPct >= 100) { setBoilerOn(); return; }
-    uint32_t onTime = (periodMs * dutyPct) / 100u;
-    if ((t - windowStart) < onTime) setBoilerOn(); else setBoilerOff();
+    
+    uint32_t onTime = (HEATER_PERIOD_MS * dutyPct) / 100u;
+    if ((now - g_heaterWindowStart) < onTime) setBoilerOn(); else setBoilerOff();
   };
 
   // Safety: standby always forces heater off
@@ -63,41 +76,36 @@ void justDoCoffee(const eepromValues_t &runningCfg, const SensorState &currentSt
   } else {
     const float diff = setpointC - filteredTempC; // positive when below target
 
-    // Hardware-optimized control for Gaggia Classic (small boiler, 1400W element)
-    // Goal: ±0.5°C stability (limited by boiler thermal mass and SSR minimum on-time)
+    // SIMPLIFIED temperature control for Gaggia Classic (small boiler, 1400W element)
+    // Single 2-second period with variable duty cycle - simpler and more reliable
+    // Slope-based predictive adjustment prevents overshoot
+    
+    uint8_t duty = 0;
+    
     if (diff > 4.0f) {
-      // Far below: heat aggressively
-      timePropHeat(1000, 100);
+      // Far below target: full power
+      duty = 100;
     } else if (diff > 2.0f) {
-      // Getting closer: reduce power
-      timePropHeat(2000, 55);
+      // Getting closer: high power, reduce if rising fast
+      duty = (slopeCps > 0.3f) ? 40 : 60;
     } else if (diff > 1.0f) {
-      // Approaching target: moderate power with long period
-      timePropHeat(3500, 28);
-    } else if (diff > 0.5f) {
-      // Close to target: very gentle with longer period to avoid SSR chatter
-      // Use 6-second window for stable minimum duty cycle
-      if (slopeCps > 0.15f) setBoilerOff(); else timePropHeat(6000, 12);
+      // Approaching target: moderate power with slope adjustment
+      duty = (slopeCps > 0.2f) ? 20 : 35;
+    } else if (diff > 0.3f) {
+      // Close to target: gentle heating unless already rising
+      duty = (slopeCps > 0.1f) ? 0 : 15;
     } else if (diff > 0.0f) {
-      // Within ±0.5°C deadband below setpoint: minimal pulses
-      // 8-second window allows SSR to work reliably at minimum duty
-      if (slopeCps > 0.08f) {
-        setBoilerOff();
-      } else {
-        timePropHeat(8000, 8);  // ~640ms on per 8s = minimum practical SSR duty
-      }
+      // Very close below setpoint: minimal heat unless falling
+      duty = (slopeCps > 0.05f) ? 0 : 8;
     } else if (diff > -0.5f) {
-      // Within ±0.5°C deadband above setpoint: coast/maintain
-      // Only heat if falling rapidly
-      if (slopeCps < -0.10f) {
-        timePropHeat(10000, 6);  // Very minimal maintenance heat
-      } else {
-        setBoilerOff();
-      }
+      // Slightly above setpoint: only heat if falling fast
+      duty = (slopeCps < -0.1f) ? 5 : 0;
     } else {
-      // Above deadband: off
-      setBoilerOff();
+      // Well above setpoint: off
+      duty = 0;
     }
+    
+    timePropHeat(duty);
   }
 
   // Steam relays kept off in brew mode or when brew switch is not active
@@ -133,6 +141,13 @@ void pulseHeaters(const uint32_t pulseLength, const int factor_1, const int fact
 //#############################################################################################
 void steamCtrl(const eepromValues_t &runningCfg, SensorState &currentState) {
   lcdTargetState((int)(currentState.steamSwitchState ? HEATING::MODE_steam : HEATING::MODE_brew));
+
+  // CRITICAL: Close the 3-way valve to direct steam to the steam wand!
+  // On SINGLE_BOARD the valvePin controls the 3-way solenoid:
+  // - closeValve() = steam/water goes to steam wand
+  // - openValve() = steam/water goes to group head (wrong for steaming!)
+  closeValve();
+
   // steam temp control, needs to be aggressive to keep steam pressure acceptable
   float steamTempSetPoint = runningCfg.steamSetPoint + runningCfg.offsetTemp;
   float sensorTemperature = currentState.temperature + runningCfg.offsetTemp;
@@ -149,7 +164,8 @@ void steamCtrl(const eepromValues_t &runningCfg, SensorState &currentState) {
     setSteamValveRelayOn();
     setSteamBoilerRelayOn();
     #ifndef DREAM_STEAM_DISABLED
-      // DreamSteam: add water when pressure is low
+      // DreamSteam: add water when pressure is low to enable continuous steaming
+      // Pump runs at very low power (3) to slowly replenish boiler water
       (currentState.smoothedPressure < activeSteamPressure_) ? setPumpToRawValue(3) : setPumpOff();
     #endif
   }
