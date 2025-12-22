@@ -10,7 +10,7 @@ extern unsigned long steamTime;
 
 // SIMPLIFIED: Single fixed period for all temperature control
 // This eliminates timing state corruption that caused the intermittent brew bug
-static const uint32_t HEATER_PERIOD_MS = 2000;  // 2 second period - good balance for all conditions
+static const uint32_t HEATER_PERIOD_MS = 1000;  // 1 second period - faster response
 static uint32_t g_heaterWindowStart = 0;
 
 void justDoCoffee(const eepromValues_t &runningCfg, const SensorState &currentState, const bool brewActive) {
