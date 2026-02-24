@@ -21,8 +21,6 @@
 #define PB6   1
 #define PB7   1
 
-#define Serial1   1
-#define Serial2   1
 #define AUTO_VERSION "test"
 #define OUTPUT_OPEN_DRAIN 0x5
 

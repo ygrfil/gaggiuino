@@ -140,40 +140,95 @@ void pulseHeaters(const uint32_t pulseLength, const int factor_1, const int fact
 //################################____STEAM_POWER_CONTROL____##################################
 //#############################################################################################
 void steamCtrl(const eepromValues_t &runningCfg, SensorState &currentState) {
+  // Tuned for PCB builds where pressure can be trapped before the check valve.
+  constexpr float steamRefillPressureThreshold = 3.5f;
+  constexpr float steamThermalAssistMinTemp = 110.0f;
+  constexpr float steamThermalAssistSetpointDelta = 1.0f;
+  constexpr float steamHardOverTempMargin = 12.0f;
+  constexpr uint8_t steamPumpRefillPower = 45;
+  constexpr uint8_t steamPumpAssistPower = 32;
+  constexpr uint32_t steamPumpAssistOnMs = 350UL;
+  constexpr uint32_t steamPumpAssistOffMs = 700UL;
+
+  static bool assistPulseOn = false;
+  static uint32_t assistPulseChangedAt = 0;
+
   lcdTargetState((int)(currentState.steamSwitchState ? HEATING::MODE_steam : HEATING::MODE_brew));
 
-  // CRITICAL: Close the 3-way valve to direct steam to the steam wand!
-  // On SINGLE_BOARD the valvePin controls the 3-way solenoid:
-  // - closeValve() = steam/water goes to steam wand
-  // - openValve() = steam/water goes to group head (wrong for steaming!)
+  // Keep group path closed so pressure is directed to the manual steam wand.
   closeValve();
 
-  // steam temp control, needs to be aggressive to keep steam pressure acceptable
-  float steamTempSetPoint = runningCfg.steamSetPoint + runningCfg.offsetTemp;
-  float sensorTemperature = currentState.temperature + runningCfg.offsetTemp;
+  // Leaving steam mode: make sure steam-specific outputs are dropped.
+  if (!currentState.steamSwitchState) {
+    setSteamValveRelayOff();
+    setSteamBoilerRelayOff();
+    setPumpOff();
+    assistPulseOn = false;
+    assistPulseChangedAt = 0;
+    return;
+  }
 
-  // Steam logic - shut down if pressure or temp exceeds limits
-  if (currentState.smoothedPressure > steamThreshold_ || sensorTemperature > steamTempSetPoint) {
+  const float steamTempSetPoint = runningCfg.steamSetPoint + runningCfg.offsetTemp;
+  const float sensorTemperature = currentState.temperature + runningCfg.offsetTemp;
+  const float steamHardMaxTemp = steamTempSetPoint + steamHardOverTempMargin;
+
+  // Hard safety cutoff only for unsafe over-pressure or over-temperature.
+  if (currentState.smoothedPressure > steamThreshold_ || sensorTemperature > steamHardMaxTemp) {
     setBoilerOff();
     setSteamBoilerRelayOff();
     setSteamValveRelayOff();
     setPumpOff();
+    assistPulseOn = false;
+    assistPulseChangedAt = 0;
   } else {
-    // Control boiler based on temperature
-    (sensorTemperature < steamTempSetPoint) ? setBoilerOn() : setBoilerOff();
+    // Keep steam relays active while steam mode is active.
     setSteamValveRelayOn();
     setSteamBoilerRelayOn();
-    #ifndef DREAM_STEAM_DISABLED
-      // DreamSteam: add water when pressure is low to enable continuous steaming
-      // Pump runs at very low power (3) to slowly replenish boiler water
-      (currentState.smoothedPressure < activeSteamPressure_) ? setPumpToRawValue(3) : setPumpOff();
-    #endif
+
+    // Boiler heat follows temperature target.
+    if (sensorTemperature < steamTempSetPoint) {
+      setBoilerOn();
+    } else {
+      setBoilerOff();
+    }
+
+    // Refill trigger #1: pressure-based refill.
+    const bool pressureNeedsRefill = currentState.smoothedPressure < steamRefillPressureThreshold;
+    // Refill trigger #2: trapped-pressure bypass based on thermal load.
+    const bool thermalNeedsRefill =
+      sensorTemperature > steamThermalAssistMinTemp &&
+      sensorTemperature < (steamTempSetPoint - steamThermalAssistSetpointDelta);
+
+    if (pressureNeedsRefill) {
+      assistPulseOn = false;
+      assistPulseChangedAt = 0;
+      setPumpToRawValue(steamPumpRefillPower);
+    } else if (thermalNeedsRefill) {
+      const uint32_t now = millis();
+      if (assistPulseChangedAt == 0) {
+        assistPulseOn = true;
+        assistPulseChangedAt = now;
+      } else {
+        const uint32_t pulseInterval = assistPulseOn ? steamPumpAssistOnMs : steamPumpAssistOffMs;
+        if (now - assistPulseChangedAt >= pulseInterval) {
+          assistPulseOn = !assistPulseOn;
+          assistPulseChangedAt = now;
+        }
+      }
+      assistPulseOn ? setPumpToRawValue(steamPumpAssistPower) : setPumpOff();
+    } else {
+      assistPulseOn = false;
+      assistPulseChangedAt = 0;
+      setPumpOff();
+    }
   }
 
-  /*In case steam is forgotten ON for more than 15 min*/
+  // Steam forgotten ON safety
   if (currentState.smoothedPressure > passiveSteamPressure_) {
     currentState.isSteamForgottenON = millis() - steamTime >= STEAM_TIMEOUT;
-  } else steamTime = millis();
+  } else {
+    steamTime = millis();
+  }
 }
 
 /*Water mode and all that*/

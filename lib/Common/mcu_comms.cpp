@@ -1,6 +1,7 @@
 /* 09:32 15/03/2023 - change triggering comment */
 #include "mcu_comms.h"
 #include <stdarg.h>
+#include <cstring>
 
 using namespace std;
 
@@ -9,24 +10,55 @@ size_t ProfileSerializer::neededBufferSize(Profile& profile) const {
 }
 
 vector<uint8_t> ProfileSerializer::serializeProfile(Profile& profile) const {
-  vector<uint8_t> buffer;
-  buffer.reserve(neededBufferSize(profile));
-  size_t phaseCount = profile.phaseCount();
+  const size_t phaseCount = profile.phaseCount();
+  const size_t phaseBytes = phaseCount * sizeof(Phase);
+  const size_t totalBytes = sizeof(phaseCount) + phaseBytes + sizeof(profile.globalStopConditions);
 
-  memcpy(buffer.data(), &phaseCount, sizeof(phaseCount));
-  memcpy(buffer.data() + sizeof(phaseCount), profile.phases.data(), phaseCount * sizeof(Phase));
-  memcpy(buffer.data() + sizeof(phaseCount) + phaseCount * sizeof(Phase), &profile.globalStopConditions, sizeof(profile.globalStopConditions));
+  vector<uint8_t> buffer(totalBytes);
+  size_t offset = 0;
 
+  memcpy(buffer.data() + offset, &phaseCount, sizeof(phaseCount));
+  offset += sizeof(phaseCount);
+
+  if (phaseCount > 0) {
+    memcpy(buffer.data() + offset, profile.phases.data(), phaseBytes);
+    offset += phaseBytes;
+  }
+
+  memcpy(buffer.data() + offset, &profile.globalStopConditions, sizeof(profile.globalStopConditions));
   return buffer;
 }
 
 void ProfileSerializer::deserializeProfile(vector<uint8_t>& buffer, Profile& profile) const {
-  size_t phaseCount;
-  memcpy(&phaseCount, buffer.data(), sizeof(profile.phaseCount()));
+  if (buffer.size() < sizeof(size_t) + sizeof(profile.globalStopConditions)) {
+    profile.phases.clear();
+    profile.globalStopConditions = GlobalStopConditions{};
+    return;
+  }
+
+  size_t phaseCount = 0;
+  size_t offset = 0;
+  memcpy(&phaseCount, buffer.data() + offset, sizeof(phaseCount));
+  offset += sizeof(phaseCount);
+
+  const size_t phaseBytes = phaseCount * sizeof(Phase);
+  const size_t expectedBytes = sizeof(phaseCount) + phaseBytes + sizeof(profile.globalStopConditions);
+  if (buffer.size() < expectedBytes) {
+    profile.phases.clear();
+    profile.globalStopConditions = GlobalStopConditions{};
+    return;
+  }
+
   profile.phases.clear();
   profile.phases.reserve(phaseCount);
-  memcpy(profile.phases.data(), buffer.data() + sizeof(profile.phaseCount()), phaseCount * sizeof(Phase));
-  memcpy(&profile.globalStopConditions, buffer.data() + sizeof(profile.phaseCount()) + phaseCount * sizeof(Phase), sizeof(profile.globalStopConditions));
+  profile.phases.resize(phaseCount);
+
+  if (phaseCount > 0) {
+    memcpy(profile.phases.data(), buffer.data() + offset, phaseBytes);
+    offset += phaseBytes;
+  }
+
+  memcpy(&profile.globalStopConditions, buffer.data() + offset, sizeof(profile.globalStopConditions));
 }
 
 //---------------------------------------------------------------------------------
