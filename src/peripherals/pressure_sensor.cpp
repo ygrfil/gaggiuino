@@ -1,6 +1,7 @@
 /* 09:32 15/03/2023 - change triggering comment */
 #include "pressure_sensor.h"
 #include "pindef.h"
+#include "Wire.h"
 #include "ADS1X15.h"
 #include "../lcd/lcd.h"
 #include "../log.h"
@@ -11,7 +12,13 @@ ADS1015 ADS(0x48);
 float previousPressure;
 float currentPressure;
 
+static void adsWireInit(void) {
+  Wire.begin(PIN_WIRE_SDA, PIN_WIRE_SCL);
+  Wire.setClock(100000);
+}
+
 void adsInit(void) {
+  adsWireInit();
   ADS.begin();
   ADS.setGain(0);      // 6.144 volt
   ADS.setDataRate(4);  // fast
@@ -64,7 +71,12 @@ void i2cResetState(void) {
     char tmp[25];
     unsigned int check = snprintf(tmp, sizeof(tmp), "I2C error code: %i", result);
     if (check > 0 && check <= sizeof(tmp)) {
-      result == 0 ? adsInit() : lcdShowPopup(tmp);
+      if (result == 0) {
+        adsWireInit();
+        adsInit();
+      } else {
+        lcdShowPopup(tmp);
+      }
     }
     delay(50);
   }
