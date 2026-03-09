@@ -4,6 +4,7 @@
 #include <PSM.h>
 #include "utils.h"
 #include "internal_watchdog.h"
+#include "pressure_controller.h"
 
 PSM pump(zcPin, dimmerPin, PUMP_RANGE, ZC_MODE, 1, 6);
 
@@ -21,6 +22,10 @@ constexpr std::array<float, 7> pressureInefficiencyCoefficient {{
   -0.0018f
 }};
 
+namespace {
+PressureController pressureController;
+}
+
 // Initialising some pump specific specs, mainly:
 // - max pump clicks(dependant on region power grid spec)
 // - pump clicks at 0 pressure in the system
@@ -29,31 +34,11 @@ void pumpInit(const int powerLineFrequency, const float pumpFlowAtZero) {
   maxPumpClicksPerSecond = powerLineFrequency;
   flowPerClickAtZeroBar = pumpFlowAtZero;
   fpc_multiplier = 60.f / (float)maxPumpClicksPerSecond;
+  pressureController.reset();
 }
 
-// Function that returns the percentage of clicks the pump makes in it's current phase
-inline float getPumpPct(const float targetPressure, const float flowRestriction, const SensorState &currentState) {
-  if (targetPressure == 0.f) {
-      return 0.f;
-  }
-
-  float diff = targetPressure - currentState.smoothedPressure;
-  float maxPumpPct = flowRestriction <= 0.f ? 1.f : getClicksPerSecondForFlow(flowRestriction, currentState.smoothedPressure) / (float) maxPumpClicksPerSecond;
-  float pumpPctToMaintainFlow = getClicksPerSecondForFlow(currentState.smoothedPumpFlow, currentState.smoothedPressure) / (float) maxPumpClicksPerSecond;
-
-  if (diff > 2.f) {
-    return fminf(maxPumpPct, 0.25f + 0.2f * diff);
-  }
-
-  if (diff > 0.f) {
-    return fminf(maxPumpPct, pumpPctToMaintainFlow * 0.95f + 0.1f + 0.2f * diff);
-  }
-
-  if (currentState.pressureChangeSpeed < 0) {
-    return fminf(maxPumpPct, pumpPctToMaintainFlow * 0.2f);
-  }
-
-  return 0;
+void resetPumpPressureControl(void) {
+  pressureController.reset();
 }
 
 // Sets the pump output based on a couple input params:
@@ -62,11 +47,25 @@ inline float getPumpPct(const float targetPressure, const float flowRestriction,
 // - flow
 // - pressure direction
 void setPumpPressure(const float targetPressure, const float flowRestriction, const SensorState &currentState) {
-  float pumpPct = getPumpPct(targetPressure, flowRestriction, currentState);
+  const float maxPumpPct = flowRestriction <= 0.f
+    ? 1.f
+    : getClicksPerSecondForFlow(flowRestriction, currentState.smoothedPressure) / (float)maxPumpClicksPerSecond;
+  const float basePumpPct = getClicksPerSecondForFlow(currentState.smoothedPumpFlow, currentState.smoothedPressure) / (float)maxPumpClicksPerSecond;
+  const float pumpPct = pressureController.update(
+    PressureControllerInput{
+      .targetPressure = targetPressure,
+      .currentPressure = currentState.smoothedPressure,
+      .pressureChangeSpeed = currentState.pressureChangeSpeed,
+      .basePumpPct = basePumpPct,
+      .maxPumpPct = maxPumpPct
+    },
+    millis()
+  );
   setPumpToRawValue((uint8_t)(pumpPct * PUMP_RANGE));
 }
 
 void setPumpOff(void) {
+  pressureController.reset();
   pump.set(0);
 }
 
@@ -109,8 +108,9 @@ void pumpPhaseShift(void) {
 // Models the flow per click, follows a compromise between the schematic and recorded findings
 // plotted: https://www.desmos.com/calculator/eqynzclagu
 float getPumpFlowPerClick(const float pressure) {
+  const float safePressure = pressure < 0.01f ? 0.01f : pressure;
   float fpc = 0.f;
-  fpc = (pressureInefficiencyCoefficient[5] / pressure + pressureInefficiencyCoefficient[6]) * ( -pressure * pressure ) + ( flowPerClickAtZeroBar - pressureInefficiencyCoefficient[0]) - (pressureInefficiencyCoefficient[1] + (pressureInefficiencyCoefficient[2] - (pressureInefficiencyCoefficient[3] - pressureInefficiencyCoefficient[4] * pressure) * pressure) * pressure) * pressure;
+  fpc = (pressureInefficiencyCoefficient[5] / safePressure + pressureInefficiencyCoefficient[6]) * ( -safePressure * safePressure ) + ( flowPerClickAtZeroBar - pressureInefficiencyCoefficient[0]) - (pressureInefficiencyCoefficient[1] + (pressureInefficiencyCoefficient[2] - (pressureInefficiencyCoefficient[3] - pressureInefficiencyCoefficient[4] * safePressure) * safePressure) * safePressure) * safePressure;
   return fpc * fpc_multiplier;
 }
 
@@ -123,6 +123,9 @@ float getPumpFlow(const float cps, const float pressure) {
 float getClicksPerSecondForFlow(const float flow, const float pressure) {
   if (flow == 0.f) return 0;
   float flowPerClick = getPumpFlowPerClick(pressure);
+  if (flowPerClick <= 0.0001f) {
+    return (float)maxPumpClicksPerSecond;
+  }
   float cps = flow / flowPerClick;
   return fminf(cps, (float)maxPumpClicksPerSecond);
 }

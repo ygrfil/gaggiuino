@@ -4,6 +4,8 @@
 
 struct SystemState {
   bool startupInitFinished;
+  bool boilerFillActive;
+  bool standbyActive;
 };
 
 #endif

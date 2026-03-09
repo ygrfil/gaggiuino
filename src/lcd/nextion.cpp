@@ -7,6 +7,13 @@
 EasyNex myNex(USART_LCD);
 volatile NextionPage lcdCurrentPageId;
 volatile NextionPage lcdLastCurrentPageId;
+volatile bool lcdUserActivity = false;
+
+namespace {
+void markUserActivity(void) {
+  lcdUserActivity = true;
+}
+}
 
 // decode/encode bit packing.
 // format is 000000sd rrrrrrrr gggggggg bbbbbbbb, where s = state, d = disco, r/g/b = colors
@@ -59,12 +66,22 @@ bool lcdCheckSerialInit(const char* expectedOutput, size_t expectedLen) {
 }
 
 void lcdListen(void) {
+  const auto previousPageId = lcdCurrentPageId;
   myNex.NextionListen();
   lcdCurrentPageId = static_cast<NextionPage>(myNex.currentPageId);
+  if (lcdCurrentPageId != previousPageId) {
+    markUserActivity();
+  }
 }
 
 void lcdWakeUp(void) {
   myNex.writeNum("sleep", 0);
+}
+
+bool lcdConsumeUserActivity(void) {
+  const bool hadActivity = lcdUserActivity;
+  lcdUserActivity = false;
+  return hadActivity;
 }
 
 void lcdUploadProfile(eepromValues_t &eepromCurrentValues) {
@@ -462,7 +479,7 @@ void lcdFetchPage(eepromValues_t &settings, NextionPage page, int targetProfile)
 }
 
 uint8_t lcdGetSelectedProfile(void) {
-  uint8_t pId;
+  uint8_t pId = 1;
   int attempts = 2;
   do {
     if (attempts-- <= 0) {
@@ -572,12 +589,12 @@ void lcdWarmupStateStop(void) {
   myNex.writeNum("warmupState", 0);
 }
 
-void trigger1(void) { lcdSaveSettingsTrigger(); }
-void trigger2(void) { lcdScalesTareTrigger(); }
-void trigger3(void) { lcdHomeScreenScalesTrigger(); }
-void trigger4(void) { lcdBrewGraphScalesTareTrigger(); }
-void trigger6(void) { lcdRefreshElementsTrigger(); }
-void trigger7(void) { lcdQuickProfileSwitch(); }
-void trigger8(void) { lcdSaveProfileTrigger(); }
-void trigger9(void) { lcdResetSettingsTrigger(); }
-void trigger10(void) { lcdLoadDefaultProfileTrigger(); }
+void trigger1(void) { markUserActivity(); lcdSaveSettingsTrigger(); }
+void trigger2(void) { markUserActivity(); lcdScalesTareTrigger(); }
+void trigger3(void) { markUserActivity(); lcdHomeScreenScalesTrigger(); }
+void trigger4(void) { markUserActivity(); lcdBrewGraphScalesTareTrigger(); }
+void trigger6(void) { markUserActivity(); lcdRefreshElementsTrigger(); }
+void trigger7(void) { markUserActivity(); lcdQuickProfileSwitch(); }
+void trigger8(void) { markUserActivity(); lcdSaveProfileTrigger(); }
+void trigger9(void) { markUserActivity(); lcdResetSettingsTrigger(); }
+void trigger10(void) { markUserActivity(); lcdLoadDefaultProfileTrigger(); }

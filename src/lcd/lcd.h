@@ -36,6 +36,7 @@ void lcdUploadCfg(eepromValues_t &eepromCurrentValues);
 void uploadPageCfg(eepromValues_t &eepromCurrentValues, SystemState &sys);
 void lcdListen(void);
 void lcdWakeUp(void);
+bool lcdConsumeUserActivity(void);
 
 void lcdFetchCurrentProfile(eepromValues_t & settings);
 void lcdFetchLed(eepromValues_t & settings);

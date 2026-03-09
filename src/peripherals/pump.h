@@ -10,6 +10,7 @@
 constexpr uint8_t PUMP_RANGE = 100;
 
 void pumpInit(const int powerLineFrequency, const float pumpFlowAtZero);
+void resetPumpPressureControl(void);
 void setPumpPressure(const float targetPressure, const float flowRestriction, const SensorState &currentState);
 void setPumpOff(void);
 void setPumpFullOn(void);

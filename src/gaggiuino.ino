@@ -7,14 +7,12 @@
 
 SimpleKalmanFilter smoothPressure(0.6f, 0.6f, 0.1f);
 SimpleKalmanFilter smoothPumpFlow(0.1f, 0.1f, 0.01f);
-SimpleKalmanFilter smoothScalesFlow(0.5f, 0.5f, 0.01f);
 SimpleKalmanFilter smoothConsideredFlow(0.1f, 0.1f, 0.1f);
+InactivityTracker inactivityTracker(MACHINE_STANDBY_TIMEOUT_MS);
 
 //default phases. Updated in updateProfilerPhases.
 Profile profile;
 PhaseProfiler phaseProfiler{profile};
-
-PredictiveWeight predictiveWeight;
 
 SensorState currentState;
 
@@ -83,13 +81,11 @@ void setup(void) {
   adsInit();
   LOG_INFO("Pressure sensor init");
 
-  // Scales handling
-  scalesInit(runningCfg.scalesF1, runningCfg.scalesF2);
-  LOG_INFO("Scales init");
-
   // Pump init
   pumpInit(runningCfg.powerLineFrequency, runningCfg.pumpFlowAtZero);
   LOG_INFO("Pump init");
+  temperatureControlInit();
+  inactivityTracker.reset(millis());
 
   pageValuesRefresh();
   LOG_INFO("Setup sequence finished");
@@ -107,11 +103,16 @@ void setup(void) {
 
 //Main loop where all the logic is continuously run
 void loop(void) {
+  const uint32_t now = millis();
   fillBoiler();
   if (lcdCurrentPageId != lcdLastCurrentPageId) pageValuesRefresh();
   lcdListen();
-  sensorsRead();
+  sensorsRead(now);
+  if (lcdConsumeUserActivity()) {
+    inactivityTracker.noteActivity(now);
+  }
   brewDetect();
+  updateStandbyState(now);
   modeSelect();
   lcdRefresh();
   espCommsSendSensorData(currentState);
@@ -123,13 +124,12 @@ void loop(void) {
 //##############################################################################################################################
 
 
-static void sensorsRead(void) {
+static void sensorsRead(const uint32_t now) {
   sensorReadSwitches();
   espCommsReadData();
-  sensorsReadTemperature();
-  sensorsReadWeight();
-  sensorsReadPressure();
-  calculateWeightAndFlow();
+  sensorsReadTemperature(now);
+  sensorsReadPressure(now);
+  calculateWeightAndFlow(now);
   updateStartupTimer();
   readTankWaterLevel();
   doLed();
@@ -139,44 +139,18 @@ static void sensorReadSwitches(void) {
   currentState.brewSwitchState = brewState();
   currentState.steamSwitchState = steamState();
   currentState.hotWaterSwitchState = waterPinState() || (currentState.brewSwitchState && currentState.steamSwitchState); // use either an actual switch, or the GC/GCP switch combo
+  currentState.scalesPresent = false;
 }
 
-static void sensorsReadTemperature(void) {
-  if (millis() > thermoTimer) {
+static void sensorsReadTemperature(const uint32_t now) {
+  if (now > thermoTimer) {
     currentState.temperature = thermocoupleRead() - runningCfg.offsetTemp;
-    thermoTimer = millis() + GET_KTYPE_READ_EVERY;
+    thermoTimer = now + GET_KTYPE_READ_EVERY;
   }
 }
 
-static void sensorsReadWeight(void) {
-  uint32_t elapsedTime = millis() - scalesTimer;
-
-  if (elapsedTime > GET_SCALES_READ_EVERY) {
-    currentState.scalesPresent = scalesIsPresent();
-    if (currentState.scalesPresent) {
-      if (currentState.tarePending) {
-        scalesTare();
-        weightMeasurements.clear();
-        weightMeasurements.add(scalesGetWeight());
-        currentState.tarePending = false;
-      }
-      else {
-        weightMeasurements.add(scalesGetWeight());
-      }
-      currentState.weight = weightMeasurements.latest().value;
-
-      if (brewActive) {
-        currentState.shotWeight = currentState.tarePending ? 0.f : currentState.weight;
-        currentState.weightFlow = fmax(0.f, weightMeasurements.measurementChange().changeSpeed());
-        currentState.smoothedWeightFlow = smoothScalesFlow.updateEstimate(currentState.weightFlow);
-      }
-    }
-    scalesTimer = millis();
-  }
-}
-
-static void sensorsReadPressure(void) {
-  uint32_t elapsedTime = millis() - pressureTimer;
+static void sensorsReadPressure(const uint32_t now) {
+  uint32_t elapsedTime = now - pressureTimer;
 
   if (elapsedTime > GET_PRESSURE_READ_EVERY) {
     float elapsedTimeSec = elapsedTime / 1000.f;
@@ -184,7 +158,7 @@ static void sensorsReadPressure(void) {
     previousSmoothedPressure = currentState.smoothedPressure;
     currentState.smoothedPressure = smoothPressure.updateEstimate(currentState.pressure);
     currentState.pressureChangeSpeed = (currentState.smoothedPressure - previousSmoothedPressure) / elapsedTimeSec;
-    pressureTimer = millis();
+    pressureTimer = now;
   }
 }
 
@@ -201,43 +175,47 @@ static long sensorsReadFlow(float elapsedTimeSec) {
   return pumpClicks;
 }
 
-static void calculateWeightAndFlow(void) {
-  uint32_t elapsedTime = millis() - flowTimer;
+static float calculateDispensedWater(const long pumpClicks, const float elapsedTimeSec) {
+  float dispensedWater = currentState.smoothedPumpFlow * elapsedTimeSec;
+  const float flowPerClick = getPumpFlowPerClick(currentState.smoothedPressure);
+  const float clickBasedWater = pumpClicks * flowPerClick;
+
+  if (dispensedWater < clickBasedWater) {
+    dispensedWater = clickBasedWater;
+  }
+
+  if ((ACTIVE_PROFILE(runningCfg).mfProfileState || ACTIVE_PROFILE(runningCfg).tpType) && currentState.pressureChangeSpeed > 0.15f) {
+    if ((currentState.smoothedPressure < ACTIVE_PROFILE(runningCfg).mfProfileStart * 0.9f)
+    || (currentState.smoothedPressure < ACTIVE_PROFILE(runningCfg).tfProfileStart * 0.9f)) {
+      dispensedWater *= 0.3f;
+    }
+  }
+
+  return dispensedWater < 0.f ? 0.f : dispensedWater;
+}
+
+static void calculateWeightAndFlow(const uint32_t now) {
+  uint32_t elapsedTime = now - flowTimer;
 
   if (brewActive) {
-    // Marking for tare in case smth has gone wrong and it has exited tare already.
-    if (currentState.weight < -.3f) currentState.tarePending = true;
-
     if (elapsedTime > REFRESH_FLOW_EVERY) {
-      flowTimer = millis();
+      flowTimer = now;
       float elapsedTimeSec = elapsedTime / 1000.f;
       long pumpClicks = sensorsReadFlow(elapsedTimeSec);
-      float consideredFlow = currentState.smoothedPumpFlow * elapsedTimeSec;
-      // Update predictive class with our current phase
-      CurrentPhase& phase = phaseProfiler.getCurrentPhase();
-      predictiveWeight.update(currentState, phase, runningCfg);
-
-      // Start the predictive weight calculations when conditions are true
-      if (predictiveWeight.isOutputFlow() || currentState.weight > 0.4f) {
-        float flowPerClick = getPumpFlowPerClick(currentState.smoothedPressure);
-        float actualFlow = (consideredFlow > pumpClicks * flowPerClick) ? consideredFlow : pumpClicks * flowPerClick;
-        /* Probabilistically the flow is lower if the shot is just started winding up and we're flow profiling,
-        once pressure stabilises around the setpoint the flow is either stable or puck restriction is high af. */
-        if ((ACTIVE_PROFILE(runningCfg).mfProfileState || ACTIVE_PROFILE(runningCfg).tpType) && currentState.pressureChangeSpeed > 0.15f) {
-          if ((currentState.smoothedPressure < ACTIVE_PROFILE(runningCfg).mfProfileStart * 0.9f)
-          || (currentState.smoothedPressure < ACTIVE_PROFILE(runningCfg).tfProfileStart * 0.9f)) {
-            actualFlow *= 0.3f;
-          }
-        }
-        currentState.consideredFlow = smoothConsideredFlow.updateEstimate(actualFlow);
-        currentState.shotWeight = currentState.scalesPresent ? currentState.shotWeight : currentState.shotWeight + actualFlow;
-      }
-      currentState.waterPumped += consideredFlow;
+      const float dispensedWater = calculateDispensedWater(pumpClicks, elapsedTimeSec);
+      currentState.consideredFlow = smoothConsideredFlow.updateEstimate(dispensedWater);
+      currentState.weightFlow = elapsedTimeSec > 0.f ? dispensedWater / elapsedTimeSec : 0.f;
+      currentState.smoothedWeightFlow = currentState.weightFlow;
+      currentState.shotWeight += dispensedWater;
+      currentState.weight = currentState.shotWeight;
+      currentState.waterPumped += dispensedWater;
     }
   } else {
     currentState.consideredFlow = 0.f;
+    currentState.weightFlow = 0.f;
+    currentState.smoothedWeightFlow = 0.f;
     currentState.pumpClicks = getAndResetClickCounter();
-    flowTimer = millis();
+    flowTimer = now;
   }
 }
 
@@ -263,7 +241,6 @@ static void pageValuesRefresh() {
   // Finally read the page we left, as it could've been changed in place (e.g. boolean toggles)
   else lcdFetchPage(runningCfg, lcdLastCurrentPageId, runningCfg.activeProfile);
 
-  homeScreenScalesEnabled = lcdGetHomeScreenScalesEnabled();
   // MODE_SELECT should always be LAST
   selectedOperationalMode = (OPERATION_MODES) lcdGetSelectedOperationalMode();
 
@@ -277,6 +254,16 @@ static void pageValuesRefresh() {
 //#############################################################################################
 static void modeSelect(void) {
   if (!systemState.startupInitFinished) return;
+  if (systemState.standbyActive) {
+    nonBrewModeActive = false;
+    brewActive = false;
+    setPumpOff();
+    closeValve();
+    setSteamValveRelayOff();
+    setSteamBoilerRelayOff();
+    temperatureControlForceOff();
+    return;
+  }
 
   switch (selectedOperationalMode) {
     //REPLACE ALL THE BELOW WITH OPMODE_auto_profiling
@@ -365,8 +352,6 @@ static void lcdRefresh(void) {
         lcdSetTemperatureDecimal(tempDecimal);
         // water lvl
         lcdSetTankWaterLvl(currentState.waterLvl);
-        //weight
-        if (homeScreenScalesEnabled) lcdSetWeight(currentState.weight);
         break;
       case NextionPage::BrewGraph:
       case NextionPage::BrewManual:
@@ -446,24 +431,22 @@ void lcdLoadDefaultProfileTrigger(void) {
 }
 
 void lcdScalesTareTrigger(void) {
-  LOG_VERBOSE("Tare scales");
-  if (currentState.scalesPresent) currentState.tarePending = true;
+  LOG_VERBOSE("Reset estimated shot weight");
+  currentState.shotWeight = 0.f;
+  currentState.weight = 0.f;
+  currentState.waterPumped = 0.f;
 }
 
 void lcdHomeScreenScalesTrigger(void) {
-  LOG_VERBOSE("Scales enabled or disabled");
-  homeScreenScalesEnabled = lcdGetHomeScreenScalesEnabled();
+  LOG_VERBOSE("No hardware scales present");
 }
 
 void lcdBrewGraphScalesTareTrigger(void) {
-  LOG_VERBOSE("Predictive scales tare action completed!");
-  if (currentState.scalesPresent) {
-    currentState.tarePending = true;
-  }
-  else {
-    currentState.shotWeight = 0.f;
-    predictiveWeight.setIsForceStarted(true);
-  }
+  LOG_VERBOSE("Reset estimated shot weight");
+  currentState.shotWeight = 0.f;
+  currentState.weight = 0.f;
+  currentState.waterPumped = 0.f;
+  currentState.consideredFlow = 0.f;
 }
 
 void lcdRefreshElementsTrigger(void) {
@@ -764,17 +747,19 @@ static void brewDetect(void) {
 }
 
 static void brewParamsReset(void) {
-  currentState.tarePending = true;
+  currentState.tarePending = false;
   currentState.shotWeight  = 0.f;
   currentState.pumpFlow    = 0.f;
+  currentState.weightFlow  = 0.f;
   currentState.weight      = 0.f;
+  currentState.smoothedWeightFlow = 0.f;
+  currentState.consideredFlow = 0.f;
   currentState.waterPumped = 0.f;
   brewingTimer             = millis();
   flowTimer                = brewingTimer;
   systemHealthTimer        = brewingTimer + HEALTHCHECK_EVERY;
-
-  weightMeasurements.clear();
-  predictiveWeight.reset();
+  resetPumpPressureControl();
+  temperatureControlReset();
   phaseProfiler.reset();
 }
 
@@ -792,6 +777,27 @@ static bool sysReadinessCheck(void) {
   }
 
   return true;
+}
+
+static void updateStandbyState(const uint32_t now) {
+  const bool machineBusy =
+    currentState.brewSwitchState ||
+    currentState.steamSwitchState ||
+    currentState.hotWaterSwitchState ||
+    brewActive ||
+    nonBrewModeActive ||
+    systemState.boilerFillActive;
+
+  inactivityTracker.update(now, machineBusy);
+  systemState.standbyActive = inactivityTracker.isStandby();
+  temperatureControlSetStandby(systemState.standbyActive);
+
+  if (systemState.standbyActive) {
+    setPumpOff();
+    closeValve();
+    setSteamValveRelayOff();
+    setSteamBoilerRelayOff();
+  }
 }
 
 static inline void sysHealthCheck(float pressureThreshold) {
@@ -827,9 +833,6 @@ static inline void sysHealthCheck(float pressureThreshold) {
     currentState.isSteamForgottenON = currentState.steamSwitchState;
   }
 
-  //Releasing the excess pressure after steaming or brewing if necessary
-  #if defined LEGO_VALVE_RELAY || defined SINGLE_BOARD
-
   // No point going through the whole thing if this first condition isn't met.
   if (currentState.brewSwitchState || currentState.steamSwitchState || currentState.hotWaterSwitchState) {
     systemHealthTimer = millis() + HEALTHCHECK_EVERY;
@@ -848,11 +851,13 @@ static inline void sysHealthCheck(float pressureThreshold) {
           brewDetect();
           lcdRefresh();
           lcdListen();
-          sensorsRead();
-          justDoCoffee(runningCfg, currentState, brewActive);
+          sensorsRead(millis());
+          if (!systemState.standbyActive) {
+            justDoCoffee(runningCfg, currentState, brewActive);
+          }
           break;
         default:
-          sensorsRead();
+          sensorsRead(millis());
           lcdShowPopup("Releasing pressure!");
           setPumpOff();
           setBoilerOff();
@@ -879,7 +884,6 @@ static inline void sysHealthCheck(float pressureThreshold) {
       }
     }
   }
-  #endif
 }
 
 // Function to track time since system has started
@@ -889,8 +893,7 @@ static unsigned long getTimeSinceInit(void) {
 }
 
 static void fillBoiler(void) {
-  #if defined LEGO_VALVE_RELAY || defined SINGLE_BOARD
-
+  systemState.boilerFillActive = false;
   if (systemState.startupInitFinished) {
     return;
   }
@@ -901,14 +904,12 @@ static void fillBoiler(void) {
   }
 
   if (isBoilerFillPhase(getTimeSinceInit()) && !isSwitchOn()) {
+    systemState.boilerFillActive = true;
     fillBoilerUntilThreshod(getTimeSinceInit());
   }
   else if (isSwitchOn()) {
     lcdShowPopup("Brew Switch ON!");
   }
-#else
-  systemState.startupInitFinished = true;
-#endif
 }
 
 static bool isBoilerFillPhase(unsigned long elapsedTime) {

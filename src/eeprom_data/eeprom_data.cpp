@@ -2,14 +2,6 @@
 #include <FlashStorage_STM32.h>
 #include "eeprom_metadata.h"
 #include "default_profiles.h"
-#include "legacy/eeprom_data_v4.h"
-#include "legacy/eeprom_data_v5.h"
-#include "legacy/eeprom_data_v6.h"
-#include "legacy/eeprom_data_v7.h"
-#include "legacy/eeprom_data_v8.h"
-#include "legacy/eeprom_data_v9.h"
-#include "legacy/eeprom_data_v10.h"
-#include "legacy/eeprom_data_v11.h"
 #include "../log.h"
 
 namespace {
@@ -90,7 +82,7 @@ namespace {
     }
     // General brew settings
     defaultData.homeOnShotFinish = false;
-    defaultData.brewDeltaState = true;
+    defaultData.brewDeltaState = false;
     defaultData.basketPrefill = false;
     // System settings
     defaultData.steamSetPoint = 155;
@@ -101,8 +93,8 @@ namespace {
     defaultData.powerLineFrequency = 50;
     defaultData.lcdSleep = 16;
     defaultData.warmupState = false;
-    defaultData.scalesF1 = 3920;
-    defaultData.scalesF2 = 4210;
+    defaultData.scalesF1 = 0;
+    defaultData.scalesF2 = 0;
     defaultData.pumpFlowAtZero = 0.2225f;
     defaultData.ledState  = true;
     defaultData.ledDisco  = true;
@@ -168,21 +160,12 @@ void eepromInit(void) {
   // initialiaze defaults on memory
   eepromMetadata.values = getEepromDefaults();
 
-  // read version
-  uint16_t version;
+  uint16_t version = 0;
   EEPROM.get(0, version);
-
-  // load appropriate version (including current)
-  bool readSuccess = false;
-
-  if (version < EEPROM_DATA_VERSION && legacyEepromDataLoaders[version] != nullptr) {
-    readSuccess = (*legacyEepromDataLoaders[version])(eepromMetadata.values);
-  } else {
-    readSuccess = loadCurrentEepromData(eepromMetadata.values);
-  }
+  const bool readSuccess = loadCurrentEepromData(eepromMetadata.values);
 
   if (!readSuccess) {
-    LOG_ERROR("SECU_CHECK FAILED! Applying defaults! eepromMetadata.version=%d", version);
+    LOG_INFO("Applying defaults for EEPROM version %d", version);
     eepromMetadata.values = getEepromDefaults();
   }
 

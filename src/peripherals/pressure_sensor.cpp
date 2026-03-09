@@ -6,11 +6,7 @@
 #include "../log.h"
 #include "i2c_bus_reset.h"
 
-#if defined SINGLE_BOARD
 ADS1015 ADS(0x48);
-#else
-ADS1115 ADS(0x48);
-#endif
 
 float previousPressure;
 float currentPressure;
@@ -33,11 +29,7 @@ float getPressure(void) {  //returns sensor pressure data
   getAdsError();
 
   previousPressure = currentPressure;
-#if defined SINGLE_BOARD
   currentPressure = (ADS.getValue() - 166) / 111.11f; // 12bit
-#else
-  currentPressure = (ADS.getValue() - 2666) / 1777.8f; // 16bit
-#endif
 
   return currentPressure;
 }
