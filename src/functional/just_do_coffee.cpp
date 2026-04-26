@@ -4,6 +4,11 @@
 
 extern unsigned long steamTime;
 
+namespace {
+constexpr float STEAM_TEMP_OVERSHOOT_CUTOFF = 0.5f;
+constexpr float DREAM_STEAM_ENABLE_DELTA = 5.f;
+}
+
 void justDoCoffee(const eepromValues_t &runningCfg, const SensorState &currentState, const bool brewActive) {
   lcdTargetState((int)HEATING::MODE_brew); // setting the target mode to "brew temp"
   temperatureControlApplyBrew(runningCfg, currentState, brewActive);
@@ -17,7 +22,12 @@ void justDoCoffee(const eepromValues_t &runningCfg, const SensorState &currentSt
 //################################____STEAM_POWER_CONTROL____##################################
 //#############################################################################################
 void steamCtrl(const eepromValues_t &runningCfg, SensorState &currentState) {
-  currentState.steamSwitchState ? lcdTargetState((int)HEATING::MODE_steam) : lcdTargetState((int)HEATING::MODE_brew); // setting the steam/hot water target temp
+  lcdTargetState((int)HEATING::MODE_steam);
+  const float steamTempSetPoint = runningCfg.steamSetPoint + runningCfg.offsetTemp;
+  const float sensorTemperature = currentState.temperature + runningCfg.offsetTemp;
+
+  closeValve();
+
   if (currentState.temperature <= 0.f || currentState.temperature >= 170.f) {
     temperatureControlForceOff();
     setSteamBoilerRelayOff();
@@ -25,7 +35,7 @@ void steamCtrl(const eepromValues_t &runningCfg, SensorState &currentState) {
     setPumpOff();
     return;
   }
-  if (currentState.smoothedPressure > steamThreshold_) {
+  if (currentState.smoothedPressure > steamThreshold_ || sensorTemperature >= steamTempSetPoint + STEAM_TEMP_OVERSHOOT_CUTOFF) {
     temperatureControlForceOff();
     setSteamBoilerRelayOff();
     setSteamValveRelayOff();
@@ -35,7 +45,7 @@ void steamCtrl(const eepromValues_t &runningCfg, SensorState &currentState) {
     setSteamValveRelayOn();
     setSteamBoilerRelayOn();
 #ifndef DREAM_STEAM_DISABLED // disabled for bigger boilers which have no  need of adding water during steaming
-    if (currentState.smoothedPressure < activeSteamPressure_) {
+    if (sensorTemperature >= steamTempSetPoint - DREAM_STEAM_ENABLE_DELTA && currentState.smoothedPressure < activeSteamPressure_) {
       setPumpToRawValue(3);
     } else {
       setPumpOff();
