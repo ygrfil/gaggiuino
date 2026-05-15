@@ -5,7 +5,6 @@
 extern unsigned long steamTime;
 
 namespace {
-constexpr float STEAM_TEMP_OVERSHOOT_CUTOFF = 0.5f;
 constexpr float DREAM_STEAM_ENABLE_DELTA = 5.f;
 }
 
@@ -23,8 +22,6 @@ void justDoCoffee(const eepromValues_t &runningCfg, const SensorState &currentSt
 //#############################################################################################
 void steamCtrl(const eepromValues_t &runningCfg, SensorState &currentState) {
   lcdTargetState((int)HEATING::MODE_steam);
-  const float steamTempSetPoint = runningCfg.steamSetPoint + runningCfg.offsetTemp;
-  const float sensorTemperature = currentState.temperature + runningCfg.offsetTemp;
 
   closeValve();
 
@@ -35,7 +32,7 @@ void steamCtrl(const eepromValues_t &runningCfg, SensorState &currentState) {
     setPumpOff();
     return;
   }
-  if (currentState.smoothedPressure > steamThreshold_ || sensorTemperature >= steamTempSetPoint + STEAM_TEMP_OVERSHOOT_CUTOFF) {
+  if (currentState.smoothedPressure > steamThreshold_) {
     temperatureControlForceOff();
     setSteamBoilerRelayOff();
     setSteamValveRelayOff();
@@ -45,11 +42,15 @@ void steamCtrl(const eepromValues_t &runningCfg, SensorState &currentState) {
     setSteamValveRelayOn();
     setSteamBoilerRelayOn();
 #ifndef DREAM_STEAM_DISABLED // disabled for bigger boilers which have no  need of adding water during steaming
+    const float steamTempSetPoint = runningCfg.steamSetPoint + runningCfg.offsetTemp;
+    const float sensorTemperature = currentState.temperature + runningCfg.offsetTemp;
     if (sensorTemperature >= steamTempSetPoint - DREAM_STEAM_ENABLE_DELTA && currentState.smoothedPressure < activeSteamPressure_) {
       setPumpToRawValue(3);
     } else {
       setPumpOff();
     }
+#else
+    setPumpOff();
 #endif
   }
 

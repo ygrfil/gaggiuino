@@ -16,7 +16,7 @@ void deScale(eepromValues_t &runningCfg, const SensorState &currentState) {
     case DescalingState::IDLE: // Waiting for fuckfest to begin
       if (currentState.brewSwitchState) {
         ACTIVE_PROFILE(runningCfg).setpoint = 9;
-        openValve();
+        closeValve();
         setSteamValveRelayOn();
         descalingState = DescalingState::DESCALING_PHASE1;
         descalingCycle = 0;
@@ -25,6 +25,8 @@ void deScale(eepromValues_t &runningCfg, const SensorState &currentState) {
       break;
     case DescalingState::DESCALING_PHASE1: // Slowly penetrating that scale
       currentState.brewSwitchState ? descalingState : descalingState = DescalingState::FINISHED;
+      closeValve();
+      setSteamValveRelayOn();
       setPumpToRawValue(10);
       if (millis() - descalingTimer > DESCALE_PHASE1_EVERY) {
         lcdSetDescaleCycle(descalingCycle++);
@@ -38,6 +40,8 @@ void deScale(eepromValues_t &runningCfg, const SensorState &currentState) {
       break;
     case DescalingState::DESCALING_PHASE2: // Softening the f outta that scale
       currentState.brewSwitchState ? descalingState : descalingState = DescalingState::FINISHED;
+      closeValve();
+      setSteamValveRelayOn();
       setPumpOff();
       if (millis() - descalingTimer > DESCALE_PHASE2_EVERY) {
         descalingTimer = millis();
@@ -47,6 +51,8 @@ void deScale(eepromValues_t &runningCfg, const SensorState &currentState) {
       break;
     case DescalingState::DESCALING_PHASE3: // Fucking up that scale big time
       currentState.brewSwitchState ? descalingState : descalingState = DescalingState::FINISHED;
+      closeValve();
+      setSteamValveRelayOn();
       setPumpToRawValue(30);
       if (millis() - descalingTimer > DESCALE_PHASE3_EVERY) {
         solenoidBeat();
@@ -89,7 +95,7 @@ void solenoidBeat() {
   closeValve();
   delay(1000);
   watchdogReload();
-  openValve();
+  closeValve();
   setPumpOff();
 }
 
