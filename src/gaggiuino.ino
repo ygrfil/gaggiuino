@@ -14,6 +14,8 @@ InactivityTracker inactivityTracker(MACHINE_STANDBY_TIMEOUT_MS);
 Profile profile;
 PhaseProfiler phaseProfiler{profile};
 
+PredictiveWeight predictiveWeight;
+
 SensorState currentState;
 
 OPERATION_MODES selectedOperationalMode;
@@ -202,13 +204,24 @@ static void calculateWeightAndFlow(const uint32_t now) {
       flowTimer = now;
       float elapsedTimeSec = elapsedTime / 1000.f;
       long pumpClicks = sensorsReadFlow(elapsedTimeSec);
-      const float dispensedWater = calculateDispensedWater(pumpClicks, elapsedTimeSec);
-      currentState.consideredFlow = smoothConsideredFlow.updateEstimate(dispensedWater);
-      currentState.weightFlow = elapsedTimeSec > 0.f ? dispensedWater / elapsedTimeSec : 0.f;
-      currentState.smoothedWeightFlow = currentState.weightFlow;
-      currentState.shotWeight += dispensedWater;
-      currentState.weight = currentState.shotWeight;
-      currentState.waterPumped += dispensedWater;
+      const float pumpedWater = currentState.smoothedPumpFlow * elapsedTimeSec;
+      CurrentPhase& phase = phaseProfiler.getCurrentPhase();
+      predictiveWeight.update(currentState, phase, runningCfg);
+
+      if (predictiveWeight.isOutputFlow()) {
+        const float dispensedWater = calculateDispensedWater(pumpClicks, elapsedTimeSec);
+        currentState.consideredFlow = smoothConsideredFlow.updateEstimate(dispensedWater);
+        currentState.weightFlow = elapsedTimeSec > 0.f ? dispensedWater / elapsedTimeSec : 0.f;
+        currentState.smoothedWeightFlow = currentState.weightFlow;
+        currentState.shotWeight += dispensedWater;
+        currentState.weight = currentState.shotWeight;
+      } else {
+        currentState.consideredFlow = 0.f;
+        currentState.weightFlow = 0.f;
+        currentState.smoothedWeightFlow = 0.f;
+      }
+
+      currentState.waterPumped += pumpedWater > 0.f ? pumpedWater : 0.f;
     }
   } else {
     currentState.consideredFlow = 0.f;
@@ -431,6 +444,7 @@ void lcdScalesTareTrigger(void) {
   currentState.shotWeight = 0.f;
   currentState.weight = 0.f;
   currentState.waterPumped = 0.f;
+  predictiveWeight.reset();
 }
 
 void lcdHomeScreenScalesTrigger(void) {
@@ -443,6 +457,8 @@ void lcdBrewGraphScalesTareTrigger(void) {
   currentState.weight = 0.f;
   currentState.waterPumped = 0.f;
   currentState.consideredFlow = 0.f;
+  predictiveWeight.reset();
+  predictiveWeight.setIsForceStarted(true);
 }
 
 void lcdRefreshElementsTrigger(void) {
@@ -756,6 +772,7 @@ static void brewParamsReset(void) {
   systemHealthTimer        = brewingTimer + HEALTHCHECK_EVERY;
   resetPumpPressureControl();
   temperatureControlReset();
+  predictiveWeight.reset();
   phaseProfiler.reset();
 }
 
